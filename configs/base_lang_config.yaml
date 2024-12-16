@@ -1,2 +1,46 @@
-# TODO
-# Base YAML config for pretraining
+data:
+  train_file: "sample-10BT"
+  batch_size: 32
+  num_workers: 4
+  # The tokenizer object isn't defined here directly. In practice, you might define a tokenizer
+  # in code and attach it to cfg at runtime. Or you can specify a path to a pretrained tokenizer here.
+  tokenizer_path: "bert-base-uncased"
+  # We'll keep limit here to control how many samples we load.
+  limit: 10000
+  # Minimum text length
+  min_length: 10
+
+mask:
+  # Ratio of sentences to mask.
+  mask_ratio: 0.3
+
+model:
+  # Name or type of model architecture
+  model_name: "lang-base"
+  max_length: 512
+  pred_dim: 384
+  # If needed, you can define architecture parameters here if you want the text_transformer to read from cfg
+  embed_dim: 768
+  num_layers: 12
+  num_heads: 12
+  mlp_ratio: 4.0
+  vocab_size: 30522  # typical for BERT-like
+  dropout: 0.1
+
+optimization:
+  epochs: 10
+  lr: 0.001
+  warmup: 1
+  weight_decay: 0.04
+  final_weight_decay: 0.4
+  final_lr: 0.000001
+
+logging:
+  log_dir: "logs/lang_jepa_exp1"
+  log_freq: 50
+  checkpoint_freq: 1
+
+meta:
+  use_bfloat16: false
+  load_checkpoint: false
+  checkpoint_path: null

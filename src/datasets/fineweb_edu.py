@@ -23,7 +23,7 @@ class TextDataset(Dataset):
         """
         self.samples = []
         ds = load_dataset(
-            "HuggingFaceFW/fineweb-edu",
+            path="HuggingFaceFW/fineweb-edu",
             name=train_file,
             split="train",
             streaming=True,
