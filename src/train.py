@@ -79,7 +79,7 @@ def train(cfg):
     use_bfloat16 = cfg["meta"].get("use_bfloat16", False)
     model_name = cfg["model"]["model_name"]
     encoder, predictor = init_model(
-        model_name=model_name,
+        # model_name=model_name,
         max_length=cfg["model"]["max_length"],
         pred_dim=cfg["model"].get("pred_dim", 384),  # dimension for predictor
         device=device,

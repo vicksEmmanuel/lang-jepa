@@ -1,37 +1,59 @@
+# helper.py
 import logging
+import math
 import os
 
 import torch
 from torch.cuda.amp import GradScaler
 from torch.optim import AdamW
 
-from src.models.predictor_head import build_predictor
-from src.models.text_transformer import build_text_encoder
+from src.models.text_transformer import TextTransformerConfig, build_text_transformer
 from src.utils.schedulers import CosineWDSchedule, WarmupCosineSchedule
 
 logger = logging.getLogger(__name__)
 
-def init_model(model_name: str, max_length: int, pred_dim: int, device: torch.device):
+def init_model(max_length: int, pred_dim: int, device: torch.device, cfg=None):
     """
-    Initialize the encoder and predictor models.
+    I initialize the encoder and predictor models using the text_transformer.py code.
+    I now rely entirely on the config dict (cfg) to build TextTransformerConfig.
 
     Args:
-        model_name (str): Model identifier (e.g., "text-base").
-        max_length (int): Maximum sequence length for the encoder input.
+        max_length (int): Maximum sequence length.
         pred_dim (int): Dimension of predictor output embeddings.
-        device (torch.device): Device on which to load models.
+        device (torch.device): Device to load models on.
+        cfg (dict): The entire config dict, so I can extract model architecture parameters if needed.
 
     Returns:
         (encoder: nn.Module, predictor: nn.Module)
     """
-    # Build encoder
-    encoder, embed_dim = build_text_encoder(model_name=model_name, max_length=max_length, device=device)
-    # Build predictor
-    predictor = build_predictor(embed_dim=embed_dim, pred_dim=pred_dim, device=device)
 
-    encoder.to(device)
-    predictor.to(device)
+    if cfg is None:
+        # If no cfg passed, just use some defaults
+        config = TextTransformerConfig(
+            vocab_size=30522,
+            max_length=max_length,
+            embed_dim=768,
+            num_layers=12,
+            num_heads=12,
+            mlp_ratio=4.0,
+            dropout=0.1,
+            pred_dim=pred_dim
+        )
+    else:
+        # Build config from cfg['model'] fields
+        model_cfg = cfg['model']
+        config = TextTransformerConfig(
+            vocab_size=model_cfg.get('vocab_size', 30522),
+            max_length=model_cfg['max_length'],
+            embed_dim=model_cfg.get('embed_dim', 768),
+            num_layers=model_cfg.get('num_layers', 12),
+            num_heads=model_cfg.get('num_heads', 12),
+            mlp_ratio=model_cfg.get('mlp_ratio', 4.0),
+            dropout=model_cfg.get('dropout', 0.1),
+            pred_dim=model_cfg.get('pred_dim', pred_dim)
+        )
 
+    encoder, predictor, embed_dim = build_text_transformer(config, device)
     return encoder, predictor
 
 
@@ -48,24 +70,8 @@ def init_optimizer(
     use_bfloat16: bool = False
 ):
     """
-    Initialize optimizer, schedulers, and scaler.
-
-    Args:
-        encoder, predictor (nn.Module): The initialized models.
-        lr (float): Base learning rate.
-        weight_decay (float): Initial weight decay.
-        warmup (int): Number of warmup epochs.
-        total_epochs (int): Total training epochs.
-        steps_per_epoch (int): Number of iterations per epoch.
-        final_wd (float): Final weight decay after cosine schedule. Default: 0.0
-        final_lr (float): Final learning rate after cosine schedule. Default: 0.0
-        use_bfloat16 (bool): Whether to use bfloat16 mixed-precision.
-
-    Returns:
-        optimizer (torch.optim.Optimizer), scaler (GradScaler or None),
-        scheduler (WarmupCosineSchedule), wd_scheduler (CosineWDSchedule)
+    I initialize optimizer, schedulers, and scaler.
     """
-    # Create parameter groups
     param_groups = [
         {
             'params': (p for n, p in encoder.named_parameters()
@@ -87,14 +93,12 @@ def init_optimizer(
     ]
 
     optimizer = AdamW(param_groups, lr=lr, weight_decay=weight_decay)
-
-    # Total steps including warmup and decay
     total_steps = steps_per_epoch * total_epochs
 
     scheduler = WarmupCosineSchedule(
         optimizer=optimizer,
-        warmup_steps=int(warmup*steps_per_epoch),
-        start_lr=lr*0.1,   # Can adjust start_lr if needed
+        warmup_steps=int(warmup * steps_per_epoch),
+        start_lr=lr * 0.1,
         ref_lr=lr,
         final_lr=final_lr,
         T_max=total_steps
@@ -121,17 +125,7 @@ def load_checkpoint(
     device: torch.device
 ) -> int:
     """
-    Load checkpoint if available.
-
-    Args:
-        checkpoint_path (str): Path to the checkpoint file.
-        encoder, predictor: model instances.
-        optimizer: optimizer instance.
-        scaler: GradScaler instance (can be None).
-        device: torch.device
-
-    Returns:
-        start_epoch (int): Epoch to resume training from.
+    I load a checkpoint if available.
     """
     if checkpoint_path is None or not os.path.isfile(checkpoint_path):
         logger.info("No checkpoint found, starting from scratch.")
@@ -164,15 +158,7 @@ def save_checkpoint(
     loss: float
 ):
     """
-    Save checkpoint.
-
-    Args:
-        checkpoint_path (str): Path to save the checkpoint file.
-        encoder, predictor: models.
-        optimizer: optimizer instance.
-        scaler: GradScaler instance (can be None).
-        epoch (int): Current epoch number.
-        loss (float): Last epoch's average loss.
+    I save a checkpoint.
     """
     state = {
         'encoder': encoder.state_dict(),
