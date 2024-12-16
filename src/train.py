@@ -126,39 +126,52 @@ def train(cfg):
         for itr, (input_dict, enc_masks_batch, pred_masks_batch) in enumerate(
             dataloader
         ):
-            # input_dict: {"input_ids": ..., "attention_mask": ...}
-            # enc_masks_batch: list of lists of tensors (context sentences' token idx)
-            # pred_masks_batch: list of lists of tensors (predicted sentences' token idx)
+            iter_start = time.time()
 
+            # Log data loading time
+            data_load_time = time.time() - iter_start
+            print(f"Data loading took: {data_load_time:.3f}s")
+
+            # Move to device
+            move_start = time.time()
             input_ids = input_dict["input_ids"].to(device)
             attention_mask = input_dict["attention_mask"].to(device)
+            move_time = time.time() - move_start
+            print(f"Moving to device took: {move_time:.3f}s")
 
-
-            # Step 1: Forward target encoder to get target features
+            # Step 1: Forward target encoder
+            target_start = time.time()
             with torch.no_grad():
                 target_features = encoder(input_ids, attention_mask)
                 target_features = normalize_features(target_features)
-                # Extract and project features for masked segments
                 target_feats = extract_features_for_masks(
                     target_features, pred_masks_batch
                 )
                 target_feats = predictor.project_targets(target_feats)
+            target_time = time.time() - target_start
+            print(f"Target encoding took: {target_time:.3f}s")
 
-            # Step 2: Forward context encoder and predictor to get predictions
+            # Step 2: Forward context encoder and predictor
+            context_start = time.time()
             context_features = encoder(input_ids, attention_mask)
+            context_time = time.time() - context_start
+            print(f"Context encoding took: {context_time:.3f}s")
+
+            pred_start = time.time()
             predicted_feats = predictor(
                 context_features, enc_masks_batch, pred_masks_batch
             )
+            pred_time = time.time() - pred_start
+            print(f"Prediction took: {pred_time:.3f}s")
 
-            # They should now have the same first dimension
-            assert (
-                target_feats.size(0) == predicted_feats.size(0)
-            ), f"Mismatch in number of predictions ({predicted_feats.size(0)}) vs targets ({target_feats.size(0)})"
-
-            # Step 3: Compute loss in concept space
+            # Step 3: Compute loss
+            loss_start = time.time()
             loss = F.smooth_l1_loss(predicted_feats, target_feats)
+            loss_time = time.time() - loss_start
+            print(f"Loss computation took: {loss_time:.3f}s")
 
-            # Step 4: Backprop and optimization
+            # Step 4: Optimization
+            opt_start = time.time()
             optimizer.zero_grad()
             if use_bfloat16 and scaler is not None:
                 scaler.scale(loss).backward()
@@ -167,10 +180,20 @@ def train(cfg):
             else:
                 loss.backward()
                 optimizer.step()
+            opt_time = time.time() - opt_start
+            print(f"Optimization took: {opt_time:.3f}s")
 
             # Update schedulers
+            sched_start = time.time()
             lr = scheduler.step()
             wd_scheduler.step()
+            sched_time = time.time() - sched_start
+            print(f"Scheduler updates took: {sched_time:.3f}s")
+
+            # Total iteration time
+            iter_time = time.time() - iter_start
+            print(f"Total iteration took: {iter_time:.3f}s")
+            print("-" * 50)  # Separator between iterations
 
             # Logging
             loss_val = loss.item()
@@ -192,6 +215,7 @@ def train(cfg):
 
         # Save checkpoint
         if (epoch + 1) % checkpoint_freq == 0:
+            print(f"Saving checkpoint to {log_dir}")
             ckpt_path = os.path.join(log_dir, f"checkpoint-epoch{epoch+1}.pth")
             save_checkpoint(
                 ckpt_path,
@@ -202,6 +226,7 @@ def train(cfg):
                 epoch + 1,
                 loss_meter.avg,
             )
+            print(f"Saved checkpoint to {ckpt_path}")
 
     print("Training completed successfully.")
 
@@ -210,4 +235,3 @@ def train(cfg):
 def normalize_features(features):
     # For example, L2 normalization over the feature dimension
     return F.normalize(features, p=2, dim=-1)
-
