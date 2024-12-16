@@ -1,7 +1,7 @@
 data:
   train_file: "sample-10BT"
   batch_size: 32
-  num_workers: 4
+  num_workers: 0
   # The tokenizer object isn't defined here directly. In practice, you might define a tokenizer
   # in code and attach it to cfg at runtime. Or you can specify a path to a pretrained tokenizer here.
   tokenizer_path: "bert-base-uncased"
