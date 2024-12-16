@@ -12,6 +12,8 @@ wtpsplit = "^2.1.2"
 torch = "^2.5.1"
 devtools = "^0.12.2"
 datasets = "^3.2.0"
+wandb = "^0.19.1"
+python-dotenv = "^1.0.1"
 
 
 [build-system]

@@ -5,8 +5,10 @@ import time
 import torch
 import torch.nn.functional as F
 from devtools import debug
+from dotenv import load_dotenv
 from torch.utils.data import DataLoader
 
+import wandb
 from src.datasets.fineweb_edu import TextDataset
 from src.helper import (
     init_model,
@@ -18,6 +20,9 @@ from src.masks.lang_mask_collator import LangMaskCollator
 from src.models.text_transformer import extract_features_for_masks
 from src.utils.logging import AverageMeter, CSVLogger
 
+load_dotenv()
+
+wandb.login(key=os.environ["WANDB_API_KEY"])
 
 def train(cfg):
     """
@@ -32,6 +37,12 @@ def train(cfg):
             - logging: { 'log_dir': str, 'log_freq': int, 'checkpoint_freq': int, ... }
             - meta: { 'use_bfloat16': bool, 'load_checkpoint': bool, 'checkpoint_path': str, ... }
     """
+    # Initialize wandb at the start, after device setup
+    wandb.init(
+        project="lang-jepa",
+        config=cfg,
+        name=f"run_{time.strftime('%Y%m%d_%H%M%S')}"
+    )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # --------------------
@@ -54,7 +65,9 @@ def train(cfg):
     # --------------------
     train_file = cfg["data"]["train_file"]
     dataset = TextDataset(
-        train_file=train_file, min_length=cfg["data"].get("min_length", 10)
+        train_file=train_file,
+        min_length=cfg["data"].get("min_length", 10),
+        limit=cfg["data"].get("limit", None),
     )
     # Collator handles sentence splitting and masking
     collator = LangMaskCollator(
@@ -123,13 +136,20 @@ def train(cfg):
         epoch_start = time.time()
         loss_meter.reset()
 
+        # Track epoch metrics
+        epoch_metrics = {"epoch": epoch + 1, "epoch_loss": 0.0, "epoch_time": 0.0}
+
         for itr, (input_dict, enc_masks_batch, pred_masks_batch) in enumerate(
             dataloader
         ):
             iter_start = time.time()
 
-            # Log data loading time
+            # Track iteration timing metrics
+            timing_metrics = {}
+
+            # Data loading time
             data_load_time = time.time() - iter_start
+            timing_metrics["data_loading_time"] = data_load_time
             print(f"Data loading took: {data_load_time:.3f}s")
 
             # Move to device
@@ -137,8 +157,10 @@ def train(cfg):
             input_ids = input_dict["input_ids"].to(device)
             attention_mask = input_dict["attention_mask"].to(device)
             move_time = time.time() - move_start
+            timing_metrics["device_transfer_time"] = move_time
             print(f"Moving to device took: {move_time:.3f}s")
 
+            # Forward passes and timing tracking
             # Step 1: Forward target encoder
             target_start = time.time()
             with torch.no_grad():
@@ -149,12 +171,14 @@ def train(cfg):
                 )
                 target_feats = predictor.project_targets(target_feats)
             target_time = time.time() - target_start
+            timing_metrics["target_encoding_time"] = target_time
             print(f"Target encoding took: {target_time:.3f}s")
 
             # Step 2: Forward context encoder and predictor
             context_start = time.time()
             context_features = encoder(input_ids, attention_mask)
             context_time = time.time() - context_start
+            timing_metrics["context_encoding_time"] = context_time
             print(f"Context encoding took: {context_time:.3f}s")
 
             pred_start = time.time()
@@ -162,12 +186,14 @@ def train(cfg):
                 context_features, enc_masks_batch, pred_masks_batch
             )
             pred_time = time.time() - pred_start
+            timing_metrics["prediction_time"] = pred_time
             print(f"Prediction took: {pred_time:.3f}s")
 
             # Step 3: Compute loss
             loss_start = time.time()
             loss = F.smooth_l1_loss(predicted_feats, target_feats)
             loss_time = time.time() - loss_start
+            timing_metrics["loss_computation_time"] = loss_time
             print(f"Loss computation took: {loss_time:.3f}s")
 
             # Step 4: Optimization
@@ -181,24 +207,48 @@ def train(cfg):
                 loss.backward()
                 optimizer.step()
             opt_time = time.time() - opt_start
+            timing_metrics["optimization_time"] = opt_time
             print(f"Optimization took: {opt_time:.3f}s")
 
-            # Update schedulers
+            # Scheduler updates
             sched_start = time.time()
             lr = scheduler.step()
             wd_scheduler.step()
             sched_time = time.time() - sched_start
+            timing_metrics["scheduler_time"] = sched_time
             print(f"Scheduler updates took: {sched_time:.3f}s")
 
             # Total iteration time
             iter_time = time.time() - iter_start
+            timing_metrics["total_iteration_time"] = iter_time
             print(f"Total iteration took: {iter_time:.3f}s")
-            print("-" * 50)  # Separator between iterations
+            print("-" * 50)
 
-            # Logging
+            # Log metrics to wandb
             loss_val = loss.item()
             loss_meter.update(loss_val)
 
+            wandb_metrics = {
+                "train/loss": loss_val,
+                "train/learning_rate": lr,
+                "train/iteration": itr + epoch * len(dataloader),
+                **timing_metrics,
+            }
+            debug(wandb_metrics)
+
+            # Add some tensor statistics
+            wandb_metrics.update(
+                {
+                    "stats/target_features_mean": target_features.mean().item(),
+                    "stats/target_features_std": target_features.std().item(),
+                    "stats/predicted_features_mean": predicted_feats.mean().item(),
+                    "stats/predicted_features_std": predicted_feats.std().item(),
+                }
+            )
+
+            wandb.log(wandb_metrics)
+
+            # Regular logging
             if (itr % log_freq == 0) or math.isnan(loss_val) or math.isinf(loss_val):
                 elapsed = (time.time() - epoch_start) * 1000.0
                 csv_logger.log(epoch + 1, itr, loss_val, lr, elapsed)
@@ -206,11 +256,18 @@ def train(cfg):
                     f"[Epoch {epoch+1}/{epochs}, Itr {itr}] loss: {loss_meter.avg:.4f}, lr: {lr:.2e}"
                 )
 
-            # Optional: break early if debugging
-            # if itr > 10:
-            #     break
-
         # End of epoch logging
+        epoch_time = time.time() - epoch_start
+        epoch_metrics["epoch_loss"] = loss_meter.avg
+        epoch_metrics["epoch_time"] = epoch_time
+        wandb.log(
+            {
+                "epoch/loss": loss_meter.avg,
+                "epoch/time": epoch_time,
+                "epoch/number": epoch + 1,
+            }
+        )
+
         print(f"Epoch {epoch+1}/{epochs} finished, avg loss: {loss_meter.avg:.4f}")
 
         # Save checkpoint
@@ -227,6 +284,11 @@ def train(cfg):
                 loss_meter.avg,
             )
             print(f"Saved checkpoint to {ckpt_path}")
+            # Log checkpoint to wandb
+            wandb.save(ckpt_path)
+
+    print("Training completed successfully.")
+    wandb.finish()
 
     print("Training completed successfully.")
 

@@ -6,7 +6,7 @@ data:
   # in code and attach it to cfg at runtime. Or you can specify a path to a pretrained tokenizer here.
   tokenizer_path: "bert-base-uncased"
   # We'll keep limit here to control how many samples we load.
-  limit: 10000
+  limit: 100
   # Minimum text length
   min_length: 10
 
