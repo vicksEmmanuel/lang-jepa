@@ -16,7 +16,7 @@ from src.helper import (
     load_checkpoint,
     save_checkpoint,
 )
-from src.masks.lang_mask_collator import LangMaskCollator
+from src.masks.lang_mask_collator import LangMaskCollator, MaskOutput
 from src.models.text_transformer import (
     TextPredictor,
     TextTransformer,
@@ -131,12 +131,9 @@ def train(config: LANGJEPAConfig) -> None:
         # Track epoch metrics
         epoch_metrics = {"epoch": epoch + 1, "epoch_loss": 0.0, "epoch_time": 0.0}
 
-        for itr, (input_dict, enc_masks_batch, pred_masks_batch) in enumerate(
-            dataloader
-        ):
+        for itr, mask_output in enumerate(dataloader):
+            mask_output: MaskOutput
             iter_start = time.time()
-
-            # Track iteration timing metrics
             timing_metrics = {}
 
             # Data loading time
@@ -146,8 +143,12 @@ def train(config: LANGJEPAConfig) -> None:
 
             # Move to device
             move_start = time.time()
-            input_ids = input_dict["input_ids"].to(device)
-            attention_mask = input_dict["attention_mask"].to(device)
+            input_ids = mask_output.input_ids.to(device)
+            attention_mask = mask_output.attention_mask.to(device)
+            enc_masks_batch = mask_output.enc_masks
+            pred_masks_batch = mask_output.pred_masks
+
+            # Move to device
             move_time = time.time() - move_start
             timing_metrics["device_transfer_time"] = move_time
             print(f"Moving to device took: {move_time:.3f}s")

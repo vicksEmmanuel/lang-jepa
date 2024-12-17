@@ -79,28 +79,28 @@ class TextTransformer(nn.Module):
 
 
 def extract_features_for_masks(
-    features: torch.Tensor, masks_batch: list
+    features: torch.Tensor, masks_batch: list[list[int]]
 ) -> torch.Tensor:
     """
-    Extract features for masked tokens and return their mean representations.
+    Extract features for masked tokens.
 
     Args:
-        features: [B, N, D] tensor of encoded features
-        masks_batch: List of lists of tensors containing token indices
+        features: [batch_size, seq_len, embed_dim] tensor of encoded features
+        masks_batch: List of lists containing single mask token indices
 
     Returns:
-        masked_features: [M, D] tensor where M is total number of masked segments
+        masked_features: [num_masks, embed_dim] tensor
     """
     all_features = []
     batch_size = features.size(0)
 
     # For each item in batch
     for b in range(batch_size):
-        # For each masked segment in this batch item
-        for mask in masks_batch[b]:
-            # Get features for these indices and take their mean
-            segment_features = features[b, mask].mean(0)
-            all_features.append(segment_features)
+        # For each mask index in this batch item
+        for mask_idx in masks_batch[b]:
+            # Just get the features at the mask position
+            mask_features = features[b, mask_idx]
+            all_features.append(mask_features)
 
     if not all_features:
         return torch.empty(0, device=features.device)
@@ -111,7 +111,7 @@ def extract_features_for_masks(
 class TextPredictor(nn.Module):
     def __init__(self, input_dim: int, pred_dim: int):
         super().__init__()
-        # Project to concept space
+        # Project to concept space - used for target features
         self.target_projection = nn.Sequential(
             nn.Linear(input_dim, input_dim),
             nn.GELU(),
@@ -119,7 +119,7 @@ class TextPredictor(nn.Module):
             nn.Linear(input_dim, pred_dim),
         )
 
-        # Predict in concept space
+        # Predict in concept space - used for predicting from context
         hidden_dim = pred_dim * 2
         self.predictor = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
@@ -146,31 +146,30 @@ class TextPredictor(nn.Module):
         return self.target_projection(features)
 
     def forward(
-        self, context_feats: torch.Tensor, enc_masks_batch: list, pred_masks_batch: list
+        self,
+        context_feats: torch.Tensor,  # [batch_size, seq_len, embed_dim]
+        enc_masks_batch: list[list[int]],
+        pred_masks_batch: list[list[int]],
     ) -> torch.Tensor:
-        """
-        Predict features for masked segments using context features.
-        Should produce same number of predictions as masked segments.
-        """
+        """Predict features for masked segments using context features."""
         all_pred_feats = []
         batch_size = context_feats.size(0)
 
         # For each item in batch
         for b in range(batch_size):
-            # Get context features
+            # Get context features - average the features at context positions
             if len(enc_masks_batch[b]) > 0:
-                context_feats_b = []
-                for mask in enc_masks_batch[b]:
-                    context_feats_b.append(context_feats[b, mask].mean(0))
-                context_feats_b = torch.stack(context_feats_b).mean(0)
+                # Stack and mean the context features
+                context_feats_b = context_feats[b, enc_masks_batch[b]].mean(
+                    0
+                )  # [embed_dim]
             else:
                 # If no context, use mean of all non-padding features
-                context_feats_b = context_feats[b][
-                    context_feats[b].abs().sum(-1) > 0
-                ].mean(0)
+                mask = context_feats[b].abs().sum(-1) > 0  # Find non-padding positions
+                context_feats_b = context_feats[b][mask].mean(0)  # [embed_dim]
 
-            # Make one prediction for each masked segment
-            for _ in range(len(pred_masks_batch[b])):
+            # Make prediction for each mask token
+            for _ in pred_masks_batch[b]:
                 pred_feat = self.predictor(context_feats_b)
                 all_pred_feats.append(pred_feat)
 
