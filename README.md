@@ -6,7 +6,7 @@ Previous JEPA implementations include:
 - [I-JEPA](https://ai.meta.com/blog/yann-lecun-ai-model-i-jepa/) for images: Predicts feature representations of masked image regions
 - [V-JEPA](https://ai.meta.com/blog/v-jepa-yann-lecun-ai-model-video-joint-embedding-predictive-architecture/) for videos: Predicts future visual features without pixel reconstruction
 
-LANG-JEPA applies this approach to text, training models to predict feature-level representations of masked text segments rather than specific tokens. The goal is to develop models that reason more naturally at a conceptual level, similar to human understanding.
+LANG-JEPA applies this approach to text, training models to predict feature-level representations of masked text segments rather than specific tokens. The goal is to develop models that reason at a conceptual level, like humans.
 
 ## How It Works
 
