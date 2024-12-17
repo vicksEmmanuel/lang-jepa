@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 
 import torch
 from devtools import debug
-from wtpsplit import SaT, indices_to_sentences
+from wtpsplit import SaT
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
