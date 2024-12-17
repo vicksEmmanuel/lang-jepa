@@ -12,13 +12,16 @@ import wandb
 from src.config import LANGJEPAConfig
 from src.datasets.fineweb_edu import TextDataset
 from src.helper import (
-    init_model,
     init_optimizer,
     load_checkpoint,
     save_checkpoint,
 )
 from src.masks.lang_mask_collator import LangMaskCollator
-from src.models.text_transformer import extract_features_for_masks
+from src.models.text_transformer import (
+    TextPredictor,
+    TextTransformer,
+    extract_features_for_masks,
+)
 from src.utils.logging import AverageMeter, CSVLogger
 
 load_dotenv()
@@ -82,8 +85,11 @@ def train(config: LANGJEPAConfig) -> None:
     # Initialize model, optimizer, schedulers
     # --------------------
     use_bfloat16 = config.meta.use_bfloat16
-    debug(config.model.model_name)
-    encoder, predictor = init_model(config=config, device=device)
+
+    encoder = TextTransformer(config=config).to(device)
+    predictor = TextPredictor(
+        input_dim=config.model.embed_dim, pred_dim=config.model.pred_dim
+    ).to(device)
 
     optimizer, scaler, scheduler, wd_scheduler = init_optimizer(
         encoder=encoder,
@@ -259,7 +265,9 @@ def train(config: LANGJEPAConfig) -> None:
         # Save checkpoint
         if (epoch + 1) % checkpoint_freq == 0:
             print(f"Saving checkpoint to {config.logging.log_dir}")
-            ckpt_path = os.path.join(config.logging.log_dir, f"checkpoint-epoch{epoch+1}.pth")
+            ckpt_path = os.path.join(
+                config.logging.log_dir, f"checkpoint-epoch{epoch+1}.pth"
+            )
             save_checkpoint(
                 ckpt_path,
                 encoder,

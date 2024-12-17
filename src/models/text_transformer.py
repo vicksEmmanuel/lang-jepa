@@ -1,61 +1,48 @@
-from dataclasses import dataclass
-
 import torch
 import torch.nn as nn
 
+from src.config import LANGJEPAConfig
 
-@dataclass
-class TextTransformerConfig:
-    vocab_size: int = 30522  # Size of the vocabulary
-    max_length: int = 512  # Max sequence length
-    embed_dim: int = 768  # Embedding dimension
-    num_layers: int = 12  # Number of transformer layers
-    num_heads: int = 12  # Number of attention heads
-    mlp_ratio: float = 4.0  # Ratio for MLP hidden dim in Transformer layers
-    dropout: float = 0.1  # Dropout rate
-    attention_dropout: float = 0.1  # Dropout for attention
-    layer_norm_eps: float = 1e-5
-    initializer_range: float = 0.02
-    pred_dim: int = 384  # Dimension for predictor output embeddings
+initializer_range: float = 0.02
+layer_norm_eps = 1e-5
 
 
 class TextTransformer(nn.Module):
-    def __init__(self, config: TextTransformerConfig):
+    def __init__(self, config: LANGJEPAConfig):
         super().__init__()
-        self.config = config
+        self.config = config.model  # Using model section of config
 
         # Token embeddings
-        self.token_embedding = nn.Embedding(config.vocab_size, config.embed_dim)
+        self.token_embedding = nn.Embedding(
+            self.config.vocab_size, self.config.embed_dim
+        )
         # Positional embeddings
         self.pos_embedding = nn.Parameter(
-            torch.zeros(1, config.max_length, config.embed_dim)
+            torch.zeros(1, self.config.max_length, self.config.embed_dim)
         )
-        self.dropout = nn.Dropout(config.dropout)
+        self.dropout = nn.Dropout(self.config.dropout)
 
         # Transformer layers
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=config.embed_dim,
-            nhead=config.num_heads,
-            dim_feedforward=int(config.embed_dim * config.mlp_ratio),
-            dropout=config.dropout,
+            d_model=self.config.embed_dim,
+            nhead=self.config.num_heads,
+            dim_feedforward=int(self.config.embed_dim * self.config.mlp_ratio),
+            dropout=self.config.dropout,
             activation="gelu",
-            layer_norm_eps=config.layer_norm_eps,
+            layer_norm_eps=layer_norm_eps,
             batch_first=True,
-            norm_first=True,  # Norm-first improves stability
+            norm_first=True,
         )
         self.encoder = nn.TransformerEncoder(
-            encoder_layer, num_layers=config.num_layers
+            encoder_layer, num_layers=self.config.num_layers
         )
 
-        self.layer_norm = nn.LayerNorm(config.embed_dim, eps=config.layer_norm_eps)
-
+        self.layer_norm = nn.LayerNorm(self.config.embed_dim, eps=layer_norm_eps)
         self._init_weights()
 
     def _init_weights(self):
-        nn.init.normal_(
-            self.token_embedding.weight, mean=0.0, std=self.config.initializer_range
-        )
-        nn.init.normal_(self.pos_embedding, mean=0.0, std=self.config.initializer_range)
+        nn.init.normal_(self.token_embedding.weight, mean=0.0, std=initializer_range)
+        nn.init.normal_(self.pos_embedding, mean=0.0, std=initializer_range)
         # Layers within transformer encoder are initialized by default
 
     def forward(self, input_ids, attention_mask=None):
@@ -192,22 +179,3 @@ class TextPredictor(nn.Module):
             return torch.empty(0, device=context_feats.device)
 
         return torch.stack(all_pred_feats)
-
-
-def build_text_transformer(config: TextTransformerConfig, device: torch.device):
-    """
-    Build the text transformer (encoder) and predictor.
-
-    Args:
-        config (TextTransformerConfig): Transformer configuration parameters.
-        device (torch.device): Device for model.
-
-    Returns:
-        (encoder: nn.Module, predictor: nn.Module)
-    """
-    encoder = TextTransformer(config).to(device)
-    predictor = TextPredictor(input_dim=config.embed_dim, pred_dim=config.pred_dim).to(
-        device
-    )
-
-    return encoder, predictor, config.embed_dim
