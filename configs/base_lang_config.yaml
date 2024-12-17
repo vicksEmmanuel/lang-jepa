@@ -5,6 +5,7 @@ data:
   # The tokenizer object isn't defined here directly. In practice, you might define a tokenizer
   # in code and attach it to cfg at runtime. Or you can specify a path to a pretrained tokenizer here.
   tokenizer_path: "bert-base-uncased"
+#  tokenizer_path: "gpt2"
   # We'll keep limit here to control how many samples we load.
   limit: 100
   # Minimum text length
@@ -24,7 +25,6 @@ model:
   num_layers: 12
   num_heads: 12
   mlp_ratio: 4.0
-  vocab_size: 30522  # typical for BERT-like
   dropout: 0.1
 
 optimization:

@@ -32,7 +32,6 @@ class ModelConfig(BaseModel):
     num_layers: int = Field(gt=0, description="Number of transformer layers")
     num_heads: int = Field(gt=0, description="Number of attention heads")
     mlp_ratio: float = Field(gt=0.0, description="MLP hidden dimension ratio")
-    vocab_size: int = Field(gt=0, description="Size of the vocabulary")
     dropout: float = Field(ge=0.0, lt=1.0, description="Dropout rate")
 
 
@@ -47,7 +46,9 @@ class OptimizationConfig(BaseModel):
 
 class LoggingConfig(BaseModel):
     log_dir: str = Field(description="Directory for logs")
-    log_freq: int = Field(default=50, gt=0, description="Logging frequency in iterations")
+    log_freq: int = Field(
+        default=50, gt=0, description="Logging frequency in iterations"
+    )
     checkpoint_freq: int = Field(
         default=1, gt=0, description="Checkpoint saving frequency in epochs"
     )

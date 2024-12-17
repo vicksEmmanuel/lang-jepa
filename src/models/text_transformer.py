@@ -13,9 +13,8 @@ class TextTransformer(nn.Module):
         self.config = config.model  # Using model section of config
 
         # Token embeddings
-        self.token_embedding = nn.Embedding(
-            self.config.vocab_size, self.config.embed_dim
-        )
+        vocab_size = len(config.data.tokenizer)
+        self.token_embedding = nn.Embedding(vocab_size, self.config.embed_dim)
         # Positional embeddings
         self.pos_embedding = nn.Parameter(
             torch.zeros(1, self.config.max_length, self.config.embed_dim)
