@@ -7,6 +7,7 @@ from wtpsplit import SaT, indices_to_sentences
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+
 @dataclass
 class SentenceSplitterConfig:
     model_name: str = "sat-3l-sm"
@@ -95,7 +96,10 @@ class SentenceSplitter:
 
         for w in words:
             # +1 for space
-            if sum(len(x) + 1 for x in current_chunk) + len(w) > self.config.max_sentence_len:
+            if (
+                sum(len(x) + 1 for x in current_chunk) + len(w)
+                > self.config.max_sentence_len
+            ):
                 if current_chunk:
                     chunks.append(" ".join(current_chunk))
                 current_chunk = [w]
@@ -110,9 +114,13 @@ class SentenceSplitter:
     def _filter_by_unique_chars(self, sentences: list[str]) -> list[str]:
         if self.config.min_unique_chars <= 0:
             return sentences
+
         def unique_chars_count(s: str) -> int:
             return len(set(s))
-        return [s for s in sentences if unique_chars_count(s) > self.config.min_unique_chars]
+
+        return [
+            s for s in sentences if unique_chars_count(s) > self.config.min_unique_chars
+        ]
 
     @torch.inference_mode()
     def __call__(self, texts: list[str]) -> list[list[str]]:
@@ -122,8 +130,12 @@ class SentenceSplitter:
 
         # Split texts using the model
         # Filter out too-short texts directly
-        long_texts = [(i, t) for i, t in enumerate(texts) if len(t) > self.config.min_text_length]
-        short_texts = [(i, t) for i, t in enumerate(texts) if len(t) <= self.config.min_text_length]
+        long_texts = [
+            (i, t) for i, t in enumerate(texts) if len(t) > self.config.min_text_length
+        ]
+        short_texts = [
+            (i, t) for i, t in enumerate(texts) if len(t) <= self.config.min_text_length
+        ]
 
         # Extract the actual text for model inference
         long_text_strings = [t for _, t in long_texts]
@@ -172,12 +184,13 @@ class SentenceSplitter:
 
 if __name__ == "__main__":
     import time
+
     config = SentenceSplitterConfig()
     splitter = SentenceSplitter(config)
     sample_texts = [
         "This is a test. It's a simple test, isn't it? Yes, it is!",
         "Short",
-        "A very long sentence that definitely exceeds the maximum length of the sentence and should be split into multiple chunks by the splitter because it is too long to remain one single sentence yes very long isn't it wowowww this is super long ahuahiuhahaiuahu."
+        "A very long sentence that definitely exceeds the maximum length of the sentence and should be split into multiple chunks by the splitter because it is too long to remain one single sentence yes very long isn't it wowowww this is super long ahuahiuhahaiuahu.",
     ]
     times = []
     for _ in range(10):
