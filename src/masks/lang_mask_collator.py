@@ -17,6 +17,7 @@ class MaskOutput:
     attention_mask: torch.Tensor  # [batch_size, seq_len]
     enc_masks: list[list[int]]  # Indices of context tokens for each batch item
     pred_masks: list[list[int]]  # Indices of mask tokens for each batch item
+    original_texts: list[str]  # Original texts before processing
 
 
 class LangMaskCollator:
@@ -48,6 +49,7 @@ class LangMaskCollator:
         for sentences in batch_sentences:
             # Choose sentences to mask
             num_to_mask = max(1, int(self.mask_ratio * len(sentences)))
+            # print(f"Masking {num_to_mask} out of {len(sentences)} sentences")
             mask_indices = set(torch.randperm(len(sentences))[:num_to_mask].tolist())
 
             # Build masked sequence
@@ -96,4 +98,5 @@ class LangMaskCollator:
             attention_mask=torch.tensor(attention_mask_batch),
             enc_masks=enc_masks_batch,
             pred_masks=pred_masks_batch,
+            original_texts=batch,
         )

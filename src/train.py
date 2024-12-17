@@ -22,6 +22,7 @@ from src.models.text_transformer import (
     TextTransformer,
     extract_features_for_masks,
 )
+from src.monitor import TrainingMonitor
 from src.utils.logging import AverageMeter, CSVLogger
 
 load_dotenv()
@@ -123,6 +124,13 @@ def train(config: LANGJEPAConfig) -> None:
     loss_meter = AverageMeter()
     encoder.train()
     predictor.train()
+
+    monitor = TrainingMonitor(
+        tokenizer=config.data.tokenizer,
+        log_to_wandb=True,
+        num_examples=2,
+        log_every_n_epochs=1,
+    )
 
     for epoch in range(start_epoch, epochs):
         epoch_start = time.time()
@@ -247,6 +255,16 @@ def train(config: LANGJEPAConfig) -> None:
                 csv_logger.log(epoch + 1, itr, loss_val, lr, elapsed)
                 print(
                     f"[Epoch {epoch+1}/{epochs}, Itr {itr}] loss: {loss_meter.avg:.4f}, lr: {lr:.2e}"
+                )
+
+            if itr == 0:  # Only monitor first batch of each epoch
+                monitor.log_training_examples(
+                    epoch=epoch,
+                    batch_texts=mask_output.original_texts,
+                    mask_output=mask_output,
+                    encoder=encoder,
+                    predictor=predictor,
+                    device=device,
                 )
 
         # End of epoch logging
