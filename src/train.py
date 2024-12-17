@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from torch.utils.data import DataLoader
 
 import wandb
+from src.config import LANGJEPAConfig
 from src.datasets.fineweb_edu import TextDataset
 from src.helper import (
     init_model,
@@ -24,65 +25,55 @@ load_dotenv()
 
 wandb.login(key=os.environ["WANDB_API_KEY"])
 
-def train(cfg):
+
+def train(config: LANGJEPAConfig) -> None:
     """
-    Main training function for LANG-JEPA.
+    Main training function with type-safe config
 
     Args:
-        cfg (dict): Configuration dictionary with required keys:
-            - data: { 'train_file': str, 'batch_size': int, 'num_workers': int, ... }
-            - mask: { 'mask_ratio': float, ... }
-            - model: { 'model_name': str, 'max_length': int, ... }
-            - optimization: { 'epochs': int, 'lr': float, 'warmup': int, 'weight_decay': float, ... }
-            - logging: { 'log_dir': str, 'log_freq': int, 'checkpoint_freq': int, ... }
-            - meta: { 'use_bfloat16': bool, 'load_checkpoint': bool, 'checkpoint_path': str, ... }
+        config: Validated LANGJEPAConfig instance
     """
-    # Initialize wandb at the start, after device setup
+    # Initialize wandb
     wandb.init(
         project="lang-jepa",
-        config=cfg,
-        name=f"run_{time.strftime('%Y%m%d_%H%M%S')}"
+        config=config.model_dump(),
+        name=f"run_{time.strftime('%Y%m%d_%H%M%S')}",
     )
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # --------------------
     # Setup logging
-    # --------------------
-    log_dir = cfg["logging"]["log_dir"]
-    os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, "training.csv")
+    os.makedirs(config.logging.log_dir, exist_ok=True)
+    log_file = os.path.join(config.logging.log_dir, "training.csv")
     csv_logger = CSVLogger(
         log_file,
         ("%d", "epoch"),
         ("%d", "itr"),
         ("%.5f", "loss"),
-        ("%.2f", "lr"),
+        ("%.6f", "lr"),
         ("%.2f", "time(ms)"),
     )
 
-    # --------------------
-    # Load dataset and create dataloader
-    # --------------------
-    train_file = cfg["data"]["train_file"]
+    # Initialize dataset
     dataset = TextDataset(
-        train_file=train_file,
-        min_length=cfg["data"].get("min_length", 10),
-        limit=cfg["data"].get("limit", None),
-    )
-    # Collator handles sentence splitting and masking
-    collator = LangMaskCollator(
-        tokenizer=cfg["data"][
-            "tokenizer"
-        ],  # assuming tokenizer object is passed in cfg
-        mask_ratio=cfg["mask"]["mask_ratio"],
-        max_length=cfg["model"]["max_length"],
+        train_file=config.data.train_file,
+        limit=config.data.limit,
+        min_length=config.data.min_length,
     )
 
+    # Initialize collator
+    collator = LangMaskCollator(
+        tokenizer=config.data.tokenizer,
+        mask_ratio=config.mask.mask_ratio,
+        max_length=config.model.max_length,
+    )
+
+    # Initialize dataloader
     dataloader = DataLoader(
-        dataset,
-        batch_size=cfg["data"]["batch_size"],
+        dataset=dataset,
+        batch_size=config.data.batch_size,
         shuffle=True,
-        num_workers=cfg["data"]["num_workers"],
+        num_workers=config.data.num_workers,
         pin_memory=True,
         collate_fn=collator,
     )
@@ -90,30 +81,25 @@ def train(cfg):
     # --------------------
     # Initialize model, optimizer, schedulers
     # --------------------
-    use_bfloat16 = cfg["meta"].get("use_bfloat16", False)
-    debug(cfg["model"]["model_name"])
-    encoder, predictor = init_model(
-        max_length=cfg["model"]["max_length"],
-        pred_dim=cfg["model"].get("pred_dim", 384),  # dimension for predictor
-        device=device,
-    )
+    use_bfloat16 = config.meta.use_bfloat16
+    debug(config.model.model_name)
+    encoder, predictor = init_model(config=config, device=device)
 
     optimizer, scaler, scheduler, wd_scheduler = init_optimizer(
         encoder=encoder,
         predictor=predictor,
-        lr=cfg["optimization"]["lr"],
-        weight_decay=cfg["optimization"]["weight_decay"],
-        warmup=cfg["optimization"]["warmup"],
-        total_epochs=cfg["optimization"]["epochs"],
+        lr=config.optimization.lr,
+        weight_decay=config.optimization.weight_decay,
+        warmup=config.optimization.warmup,
+        total_epochs=config.optimization.epochs,
         steps_per_epoch=len(dataloader),
         use_bfloat16=use_bfloat16,
     )
 
     start_epoch = 0
-    if cfg["meta"].get("load_checkpoint", False):
-        checkpoint_path = cfg["meta"]["checkpoint_path"]
+    if config.meta.load_checkpoint:
         start_epoch = load_checkpoint(
-            checkpoint_path=checkpoint_path,
+            checkpoint_path=config.meta.checkpoint_path,
             encoder=encoder,
             predictor=predictor,
             optimizer=optimizer,
@@ -124,9 +110,9 @@ def train(cfg):
     # --------------------
     # Training loop
     # --------------------
-    epochs = cfg["optimization"]["epochs"]
-    log_freq = cfg["logging"].get("log_freq", 50)
-    checkpoint_freq = cfg["logging"].get("checkpoint_freq", 1)
+    epochs = config.optimization.epochs
+    log_freq = config.logging.log_freq
+    checkpoint_freq = config.logging.checkpoint_freq
 
     loss_meter = AverageMeter()
     encoder.train()
@@ -272,8 +258,8 @@ def train(cfg):
 
         # Save checkpoint
         if (epoch + 1) % checkpoint_freq == 0:
-            print(f"Saving checkpoint to {log_dir}")
-            ckpt_path = os.path.join(log_dir, f"checkpoint-epoch{epoch+1}.pth")
+            print(f"Saving checkpoint to {config.logging.log_dir}")
+            ckpt_path = os.path.join(config.logging.log_dir, f"checkpoint-epoch{epoch+1}.pth")
             save_checkpoint(
                 ckpt_path,
                 encoder,
@@ -285,7 +271,7 @@ def train(cfg):
             )
             print(f"Saved checkpoint to {ckpt_path}")
             # Log checkpoint to wandb
-            wandb.save(ckpt_path)
+            # wandb.save(ckpt_path)
 
     print("Training completed successfully.")
     wandb.finish()

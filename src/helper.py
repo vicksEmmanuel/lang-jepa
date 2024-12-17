@@ -1,61 +1,32 @@
-# helper.py
 import logging
-import math
 import os
 
 import torch
 from torch.cuda.amp import GradScaler
 from torch.optim import AdamW
 
+from src.config import LANGJEPAConfig
 from src.models.text_transformer import TextTransformerConfig, build_text_transformer
 from src.utils.schedulers import CosineWDSchedule, WarmupCosineSchedule
 
 logger = logging.getLogger(__name__)
 
-def init_model(max_length: int, pred_dim: int, device: torch.device, cfg=None):
-    """
-    I initialize the encoder and predictor models using the text_transformer.py code.
-    I now rely entirely on the config dict (cfg) to build TextTransformerConfig.
 
-    Args:
-        max_length (int): Maximum sequence length.
-        pred_dim (int): Dimension of predictor output embeddings.
-        device (torch.device): Device to load models on.
-        cfg (dict): The entire config dict, so I can extract model architecture parameters if needed.
+def init_model(config: LANGJEPAConfig, device: torch.device):
+    """Initialize models using typed config"""
+    transformer_config = TextTransformerConfig(
+        vocab_size=config.model.vocab_size,
+        max_length=config.model.max_length,
+        embed_dim=config.model.embed_dim,
+        num_layers=config.model.num_layers,
+        num_heads=config.model.num_heads,
+        mlp_ratio=config.model.mlp_ratio,
+        dropout=config.model.dropout,
+        pred_dim=config.model.pred_dim,
+    )
 
-    Returns:
-        (encoder: nn.Module, predictor: nn.Module)
-    """
-
-    if cfg is None:
-        # If no cfg passed, just use some defaults
-        config = TextTransformerConfig(
-            vocab_size=30522,
-            max_length=max_length,
-            embed_dim=768,
-            num_layers=12,
-            num_heads=12,
-            mlp_ratio=4.0,
-            dropout=0.1,
-            pred_dim=pred_dim
-        )
-    else:
-        # Build config from cfg['model'] fields
-        model_cfg = cfg['model']
-        config = TextTransformerConfig(
-            vocab_size=model_cfg.get('vocab_size', 30522),
-            max_length=model_cfg['max_length'],
-            embed_dim=model_cfg.get('embed_dim', 768),
-            num_layers=model_cfg.get('num_layers', 12),
-            num_heads=model_cfg.get('num_heads', 12),
-            mlp_ratio=model_cfg.get('mlp_ratio', 4.0),
-            dropout=model_cfg.get('dropout', 0.1),
-            pred_dim=model_cfg.get('pred_dim', pred_dim)
-        )
-
-    encoder, predictor, embed_dim = build_text_transformer(config, device)
+    encoder, predictor, embed_dim = build_text_transformer(transformer_config, device)
     return encoder, predictor
-
 
 def init_optimizer(
     encoder: torch.nn.Module,

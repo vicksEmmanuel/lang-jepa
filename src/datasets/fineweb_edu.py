@@ -7,9 +7,9 @@ class TextDataset(Dataset):
     def __init__(
         self,
         *,
-        train_file: str = "sample-10BT",
-        limit: int = 10_000,
-        min_length: int = 10,
+        train_file: str,  # sample-10BT
+        limit: int,  # 10_000
+        min_length: int,  # 10
         cache_dir: str = "~/.cache/huggingface/datasets",
     ):
         """

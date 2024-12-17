@@ -1,9 +1,0 @@
-# This file can override some parameters of base_lang_config.yaml if you load both.
-# For now, let's say it just changes the learning rate and epochs.
-
-optimization:
-  epochs: 20
-  lr: 0.0005
-
-logging:
-  log_dir: "logs/lang_jepa_exp2"

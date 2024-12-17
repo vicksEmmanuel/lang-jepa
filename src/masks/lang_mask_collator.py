@@ -12,8 +12,8 @@ class LangMaskCollator:
     def __init__(
         self,
         tokenizer,
-        mask_ratio: float = 0.3,
-        max_length: int = 512,
+        mask_ratio: float, # 0.3
+        max_length: int, # 512
         seed: int = 42,
         sentence_split_config: SentenceSplitterConfig = None,
     ):
@@ -37,7 +37,11 @@ class LangMaskCollator:
 
         self.sentence_splitter = SentenceSplitter(sentence_split_config)
 
-    def __call__(self, batch: list[str]) -> tuple[dict[str, torch.Tensor], list[list[torch.Tensor]], list[list[torch.Tensor]]]:
+    def __call__(
+        self, batch: list[str]
+    ) -> tuple[
+        dict[str, torch.Tensor], list[list[torch.Tensor]], list[list[torch.Tensor]]
+    ]:
         """
         Processes a batch of raw text samples into tokenized, masked inputs and corresponding mask indices.
 
@@ -58,7 +62,9 @@ class LangMaskCollator:
         for sentences in batch_sentences:
             num_sentences = len(sentences)
             # Ensure at least one sentence gets masked if possible
-            num_to_mask = max(1, int(self.mask_ratio * num_sentences)) if num_sentences > 0 else 0
+            num_to_mask = (
+                max(1, int(self.mask_ratio * num_sentences)) if num_sentences > 0 else 0
+            )
             if num_to_mask > 0:
                 mask_indices = random.sample(range(num_sentences), k=num_to_mask)
             else:
@@ -105,7 +111,9 @@ class LangMaskCollator:
                 start_idx = current_token_idx
                 if s_idx in mask_set:
                     # Replace all tokens in this sentence with [MASK]
-                    masked_sequence.extend([self.tokenizer.mask_token_id] * len(sent_ids))
+                    masked_sequence.extend(
+                        [self.tokenizer.mask_token_id] * len(sent_ids)
+                    )
                 else:
                     masked_sequence.extend(sent_ids)
                 end_idx = current_token_idx + len(sent_ids)
@@ -113,22 +121,28 @@ class LangMaskCollator:
                 current_token_idx = end_idx
 
             # Add special tokens [CLS] and [SEP] if required
-            full_ids = [self.tokenizer.cls_token_id] + masked_sequence + [self.tokenizer.sep_token_id]
+            full_ids = (
+                [self.tokenizer.cls_token_id]
+                + masked_sequence
+                + [self.tokenizer.sep_token_id]
+            )
 
             # Adjust indices due to the prepended [CLS]
-            sentence_token_indices = [(start+1, end+1) for (start, end) in sentence_token_indices]
+            sentence_token_indices = [
+                (start + 1, end + 1) for (start, end) in sentence_token_indices
+            ]
 
             # Truncate if necessary
             if len(full_ids) > self.max_length:
-                full_ids = full_ids[:self.max_length]
+                full_ids = full_ids[: self.max_length]
                 truncated_indices = []
-                for (start, end) in sentence_token_indices:
+                for start, end in sentence_token_indices:
                     if start < self.max_length:
                         truncated_indices.append((start, min(end, self.max_length)))
                 sentence_token_indices = truncated_indices
 
             # Pad if needed
-            attention_mask = [1]*len(full_ids)
+            attention_mask = [1] * len(full_ids)
             while len(full_ids) < self.max_length:
                 full_ids.append(self.tokenizer.pad_token_id)
                 attention_mask.append(0)
