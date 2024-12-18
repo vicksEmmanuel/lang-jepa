@@ -35,40 +35,57 @@ Converts learned feature embeddings back into human-readable text to evaluate th
 ## File Structure
 
 ```
-LANG-JEPA/
-├── configs/
-│   ├── base_lang_config.yaml     # Base configuration for LANG-JEPA
-│   ├── decoder_config.yaml       # Configuration for concept decoder
-│   └── README.md                 # Configuration documentation
+./
+├── src
+│   ├── common
+│   │   ├── datasets
+│   │   │   ├── utils
+│   │   │   │   └── sentence_splitting.py     # Sentence splitting utilities
+│   │   │   └── fineweb_edu.py                # FineWeb-Edu dataset wrapper
+│   │   ├── config.py                         # Configuration classes (Pydantic-based)
+│   │   ├── logging.py                        # Logging utilities (CSV logging, meters)
+│   │   └── schedulers.py                     # Learning rate and weight decay schedulers
+│   │
+│   ├── decoder
+│   │   ├── configs
+│   │   │   └── decoder_config.yaml           # YAML config for the decoder model and training
+│   │   ├── utils
+│   │   │   └── evaluation.py                 # Metrics (BLEU, ROUGE, etc.) and evaluation logic
+│   │   ├── decoder_dataset.py                # Dataset and DataLoader utilities for decoder training
+│   │   ├── models.py                         # Concept decoder model implementation
+│   │   └── train.py                          # Decoder training loop
+│   │
+│   └── encoder
+│       ├── configs
+│       │   └── base_lang_config.yaml          # YAML config for the encoder model and training
+│       ├── utils
+│       │   ├── helper.py                      # Initialization and optimizer utilities
+│       │   └── monitor.py                     # Monitoring and logging of training examples
+│       ├── mask_collator.py                   # Masking logic: how sentences are masked at input
+│       ├── models.py                          # LANG-JEPA encoder and predictor modules
+│       └── train.py                           # Encoder (LANG-JEPA) training loop
 │
-├── main.py                       # Entrypoint for LANG-JEPA training
-├── main_decoder.py              # Entrypoint for decoder training
-├── README.md                    # This file
-│
-└── src/
-    ├── datasets/
-    │   ├── decoder_dataset.py    # Dataset and loaders for decoder training
-    │   ├── fineweb_edu.py       # Main dataset loader
-    │   └── utils/
-    │       └── sentence_splitting.py
-    │
-    ├── masks/
-    │   └── lang_mask_collator.py # Handles sentence-level masking
-    │
-    ├── models/
-    │   ├── concept_decoder.py    # Decoder model architecture
-    │   └── text_transformer.py   # LANG-JEPA encoder architecture
-    │
-    ├── utils/
-    │   ├── evaluation.py         # Metrics for decoder evaluation
-    │   ├── logging.py           
-    │   ├── schedulers.py        
-    │   └── tensors.py           
-    │
-    ├── train.py                  # LANG-JEPA training loop
-    ├── train_decoder.py          # Decoder training loop
-    └── helper.py                # Shared utilities
+├── main_decoder.py                            # Entrypoint for decoder training
+├── main_encoder.py                            # Entrypoint for encoder (LANG-JEPA) training
+├── pyproject.toml                             # Dependencies and project configuration
+└── README.md                                  # This readme
 ```
+
+## Configuration
+### Encoder Configuration
+Defined in `src/encoder/configs/base_lang_config.yaml`.
+
+Controls aspects like:
+- Model architecture (layers, heads, dimensions)
+- Data loading and masking ratio
+- Optimization parameters (learning rate, epochs, warmup, weight decay)
+- Logging directories and frequencies
+
+### Decoder Configuration
+Defined in `src/decoder/configs/decoder_config.yaml`.
+
+Controls the concept decoder model size, training hyperparameters, and evaluation steps.
+
 
 ## Training Process
 
@@ -92,7 +109,8 @@ LANG-JEPA/
 
 1. Install dependencies:
    ```bash
-   poetry shell && poetry install
+   poetry shell
+   poetry install
    ```
 
 2. Train LANG-JEPA:
@@ -104,8 +122,3 @@ LANG-JEPA/
    ```bash
    python main_decoder.py
    ```
-
-## Configuration
-
-- `base_lang_config.yaml`: Controls LANG-JEPA model size, training, and masking
-- `decoder_config.yaml`: Sets up decoder architecture and training parameters
