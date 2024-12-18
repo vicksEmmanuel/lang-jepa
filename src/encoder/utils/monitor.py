@@ -35,7 +35,7 @@ class TrainingMonitor:
         log_to_wandb: bool = True,
         num_examples: int = 3,
         log_every_n_epochs: int = 1,
-        log_dir: Path = Path("monitor_logs"),
+        log_dir: Path = Path("logs/monitor_logs"),
     ):
         self.tokenizer = tokenizer
         self.log_to_wandb = log_to_wandb
