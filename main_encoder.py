@@ -1,11 +1,11 @@
 from transformers import AutoTokenizer
 
-from src.config import LANGJEPAConfig
-from src.train import train
+from src.common.config import LANGJEPAConfig
+from src.encoder.train import train
 
 if __name__ == "__main__":
     # Load and validate config
-    config = LANGJEPAConfig.from_yaml("configs/base_lang_config.yaml")
+    config = LANGJEPAConfig.from_yaml("src/encoder/configs/base_lang_config.yaml")
 
     # Initialize tokenizer
     tokenizer = AutoTokenizer.from_pretrained(config.data.tokenizer_path)

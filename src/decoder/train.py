@@ -7,11 +7,11 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from src.datasets.decoder_dataset import DecoderBatch
-from src.models.concept_decoder import ConceptDecoder
-from src.models.text_transformer import TextTransformer
-from src.utils.evaluation import ConceptMetrics, SampleGenerator
-from src.utils.logging import AverageMeter
+from src.common.logging import AverageMeter
+from src.decoder.decoder_dataset import DecoderBatch
+from src.decoder.models import ConceptDecoder
+from src.decoder.utils.evaluation import ConceptMetrics, SampleGenerator
+from src.encoder.models import TextTransformer
 
 
 @dataclass

@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from src.config import LANGJEPAConfig
+from src.common.config import LANGJEPAConfig
 
 initializer_range: float = 0.02
 layer_norm_eps = 1e-5

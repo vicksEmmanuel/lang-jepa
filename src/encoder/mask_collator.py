@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import torch
 from transformers import PreTrainedTokenizer
 
-from src.datasets.utils.sentence_splitting import (
+from src.common.datasets.utils.sentence_splitting import (
     SentenceSplitter,
     SentenceSplitterConfig,
 )

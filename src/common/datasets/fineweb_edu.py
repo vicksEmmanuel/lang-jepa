@@ -1,6 +1,5 @@
-from torch.utils.data import Dataset
-
 from datasets import load_dataset
+from torch.utils.data import Dataset
 
 
 class TextDataset(Dataset):

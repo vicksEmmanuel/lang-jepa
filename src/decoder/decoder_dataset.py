@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 from transformers import PreTrainedTokenizer
 
-from src.config import LANGJEPAConfig
+from src.common.config import LANGJEPAConfig
 
 
 @dataclass
@@ -58,7 +58,7 @@ def create_train_loader(
     """Create training data loader."""
     # If texts not provided, load from config's dataset
     if texts is None:
-        from src.datasets.fineweb_edu import TextDataset
+        from src.common.datasets.fineweb_edu import TextDataset
 
         dataset = TextDataset(
             train_file=config.data.train_file,
@@ -90,7 +90,7 @@ def create_eval_loader(
     if texts is None:
         # Load validation split if available, otherwise use subset of training
         try:
-            from src.datasets.fineweb_edu import TextDataset
+            from src.common.datasets.fineweb_edu import TextDataset
 
             eval_dataset = TextDataset(
                 train_file=config.data.train_file,
@@ -101,7 +101,7 @@ def create_eval_loader(
             texts = eval_dataset.samples
         except:
             # If no validation split, use subset of training data
-            from src.datasets.fineweb_edu import TextDataset
+            from src.common.datasets.fineweb_edu import TextDataset
 
             dataset = TextDataset(
                 train_file=config.data.train_file,

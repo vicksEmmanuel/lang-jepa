@@ -1,20 +1,20 @@
 import torch
 from transformers import AutoTokenizer
 
-from src.config import LANGJEPAConfig
-from src.datasets.decoder_dataset import (
+from src.common.config import LANGJEPAConfig
+from src.decoder.decoder_dataset import (
     create_eval_loader,
     create_train_loader,
     split_train_eval,
 )
-from src.models.concept_decoder import ConceptDecoder, DecoderConfig
-from src.models.text_transformer import TextTransformer
-from src.train_decoder import DecoderTrainer, DecoderTrainingConfig
+from src.decoder.models import ConceptDecoder, DecoderConfig
+from src.decoder.train import DecoderTrainer, DecoderTrainingConfig
+from src.encoder.models import TextTransformer
 
 
 def main():
     # Load base config
-    config = LANGJEPAConfig.from_yaml("configs/base_lang_config.yaml")
+    config = LANGJEPAConfig.from_yaml("src/encoder/configs/base_lang_config.yaml")
 
     # Initialize tokenizer
     tokenizer = AutoTokenizer.from_pretrained(config.data.tokenizer_path)
@@ -43,7 +43,7 @@ def main():
     )
 
     # Load all texts
-    from src.datasets.fineweb_edu import TextDataset
+    from src.common.datasets.fineweb_edu import TextDataset
 
     dataset = TextDataset(
         train_file=config.data.train_file,

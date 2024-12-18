@@ -3,12 +3,13 @@ from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from transformers import PreTrainedTokenizer
 
 import wandb
-from src.datasets.utils.sentence_splitting import (
+from src.common.datasets.utils.sentence_splitting import (
     SentenceSplitter,
     SentenceSplitterConfig,
 )
@@ -158,30 +159,38 @@ class TrainingMonitor:
             table.add_column("Type", style="cyan", width=20)
             table.add_column("Content", style="green")
 
-            # Add original text in smaller chunks for readability
+            # Escape markup in original text
+            escaped_original = escape(example.original_text)
             chunks = [
-                example.original_text[i : i + 100]
-                for i in range(0, len(example.original_text), 100)
+                escaped_original[i: i + 100]
+                for i in range(0, len(escaped_original), 100)
             ]
             table.add_row("Original Text", "\n".join(chunks))
 
-            # Add masked sentences with index numbers
+            # Escape markup in masked sentences
+            escaped_masked_sentences = [
+                escape(sent) for sent in example.masked_sentences
+            ]
             masked_text = "\n".join(
                 f"{idx + 1}. {sent}"
-                for idx, sent in enumerate(example.masked_sentences)
+                for idx, sent in enumerate(escaped_masked_sentences)
             )
             table.add_row("Masked Sentences", masked_text or "No masked sentences")
 
-            # Add context sentences with index numbers
+            # Escape markup in context sentences
+            escaped_context_sentences = [
+                escape(sent) for sent in example.context_sentences
+            ]
             context_text = "\n".join(
                 f"{idx + 1}. {sent}"
-                for idx, sent in enumerate(example.context_sentences)
+                for idx, sent in enumerate(escaped_context_sentences)
             )
             table.add_row("Context Sentences", context_text or "No context sentences")
 
             table.add_row("Embedding Similarity", f"{example.similarity_score:.4f}")
 
-            self.console.print(Panel(table, title=f"Example {i}", border_style="blue"))
+            # Disable markup at the print level to be extra safe
+            self.console.print(Panel(table, title=f"Example {i}", border_style="blue"), markup=False)
         self.console.print("\n")
 
     def _log_to_wandb(self, epoch: int, examples: list[MonitoringExample]) -> None:

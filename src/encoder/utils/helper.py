@@ -5,7 +5,7 @@ import torch
 from torch.cuda.amp import GradScaler
 from torch.optim import AdamW
 
-from src.utils.schedulers import CosineWDSchedule, WarmupCosineSchedule
+from src.common.schedulers import CosineWDSchedule, WarmupCosineSchedule
 
 logger = logging.getLogger(__name__)
 

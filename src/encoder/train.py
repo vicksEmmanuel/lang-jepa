@@ -9,21 +9,21 @@ from dotenv import load_dotenv
 from torch.utils.data import DataLoader
 
 import wandb
-from src.config import LANGJEPAConfig
-from src.datasets.fineweb_edu import TextDataset
-from src.helper import (
-    init_optimizer,
-    load_checkpoint,
-    save_checkpoint,
-)
-from src.masks.lang_mask_collator import LangMaskCollator, MaskOutput
-from src.models.text_transformer import (
+from src.common.config import LANGJEPAConfig
+from src.common.datasets.fineweb_edu import TextDataset
+from src.common.logging import AverageMeter, CSVLogger
+from src.encoder.mask_collator import LangMaskCollator, MaskOutput
+from src.encoder.models import (
     TextPredictor,
     TextTransformer,
     extract_features_for_masks,
 )
-from src.monitor import TrainingMonitor
-from src.utils.logging import AverageMeter, CSVLogger
+from src.encoder.utils.helper import (
+    init_optimizer,
+    load_checkpoint,
+    save_checkpoint,
+)
+from src.encoder.utils.monitor import TrainingMonitor
 
 load_dotenv()
 
