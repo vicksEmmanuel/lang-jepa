@@ -1,4 +1,7 @@
+import logging
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
@@ -32,6 +35,7 @@ class TrainingMonitor:
         log_to_wandb: bool = True,
         num_examples: int = 3,
         log_every_n_epochs: int = 1,
+        log_dir: Path = Path("monitor_logs"),
     ):
         self.tokenizer = tokenizer
         self.log_to_wandb = log_to_wandb
@@ -39,6 +43,34 @@ class TrainingMonitor:
         self.log_every_n_epochs = log_every_n_epochs
         self.console = Console()
         self.sentence_splitter = SentenceSplitter(SentenceSplitterConfig())
+
+        # Set up logging
+        self.log_dir = log_dir
+        self.log_dir.mkdir(exist_ok=True, parents=True)
+
+        # Console logger
+        self.console_logger = logging.getLogger("console")
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_formatter = logging.Formatter("%(message)s")
+        console_handler.setFormatter(console_formatter)
+        self.console_logger.addHandler(console_handler)
+        self.console_logger.setLevel(logging.INFO)
+
+        # File logger for training examples
+        self.file_logger = logging.getLogger("training_examples")
+        file_handler = logging.FileHandler(self.log_dir / "training_examples.log")
+        file_formatter = logging.Formatter("%(asctime)s - %(message)s")
+        file_handler.setFormatter(file_formatter)
+        self.file_logger.addHandler(file_handler)
+        self.file_logger.setLevel(logging.INFO)
+
+        # Debug logger
+        self.debug_logger = logging.getLogger("debug")
+        debug_handler = logging.StreamHandler(sys.stdout)
+        debug_formatter = logging.Formatter("[DEBUG] %(message)s")
+        debug_handler.setFormatter(debug_formatter)
+        self.debug_logger.addHandler(debug_handler)
+        self.debug_logger.setLevel(logging.DEBUG)
 
     def _map_token_to_sentence_indices(
         self,
@@ -85,10 +117,12 @@ class TrainingMonitor:
             original_text = batch_texts[idx]
             sentences = self.sentence_splitter([original_text])[0]
 
-            # Debug prints
-            self.console.print(f"\n[yellow]Debug for example {idx}:")
-            self.console.print(f"Pred masks: {mask_output.pred_masks[idx]}")
-            self.console.print(f"Input IDs shape: {mask_output.input_ids[idx].shape}")
+            # Debug logs
+            self.debug_logger.debug(f"Debug for example {idx}:")
+            self.debug_logger.debug(f"Pred masks: {mask_output.pred_masks[idx]}")
+            self.debug_logger.debug(
+                f"Input IDs shape: {mask_output.input_ids[idx].shape}"
+            )
 
             # Map token indices to sentence indices
             mask_indices = self._map_token_to_sentence_indices(
@@ -103,13 +137,16 @@ class TrainingMonitor:
                 sent for i, sent in enumerate(sentences) if i not in mask_indices
             ]
 
-            # More debug prints
-            self.console.print(f"Total sentences: {len(sentences)}")
-            self.console.print(f"Masked indices: {mask_indices}")
-            self.console.print(f"Number of masked sentences: {len(masked_sentences)}")
-            self.console.print(f"Number of context sentences: {len(context_sentences)}")
+            # More debug logs
+            self.debug_logger.debug(f"Total sentences: {len(sentences)}")
+            self.debug_logger.debug(f"Masked indices: {mask_indices}")
+            self.debug_logger.debug(
+                f"Number of masked sentences: {len(masked_sentences)}"
+            )
+            self.debug_logger.debug(
+                f"Number of context sentences: {len(context_sentences)}"
+            )
 
-            # Rest of the code remains the same...
             with torch.no_grad():
                 target_features = encoder(
                     mask_output.input_ids[idx : idx + 1].to(device),
@@ -150,7 +187,8 @@ class TrainingMonitor:
 
     def _display_examples(self, epoch: int, examples: list[MonitoringExample]) -> None:
         """Display examples in a rich formatted table with horizontal lines."""
-        self.console.print(f"\n=== Training Examples (Epoch {epoch}) ===\n")
+        # Log the header to file
+        self.file_logger.info(f"=== Training Examples (Epoch {epoch}) ===")
 
         for i, example in enumerate(examples, 1):
             table = Table(
@@ -162,7 +200,7 @@ class TrainingMonitor:
             # Escape markup in original text
             escaped_original = escape(example.original_text)
             chunks = [
-                escaped_original[i: i + 100]
+                escaped_original[i : i + 100]
                 for i in range(0, len(escaped_original), 100)
             ]
             table.add_row("Original Text", "\n".join(chunks))
@@ -189,9 +227,20 @@ class TrainingMonitor:
 
             table.add_row("Embedding Similarity", f"{example.similarity_score:.4f}")
 
-            # Disable markup at the print level to be extra safe
-            self.console.print(Panel(table, title=f"Example {i}", border_style="blue"), markup=False)
-        self.console.print("\n")
+            # Print the table to console
+            self.file_logger.info(
+                Panel(table, title=f"Example {i}", border_style="blue")
+            )
+
+            # Log example details to file
+            self.file_logger.info(f"\nExample {i}:")
+            self.file_logger.info(f"Original Text: {example.original_text}")
+            self.file_logger.info(f"Masked Sentences:\n{masked_text}")
+            self.file_logger.info(f"Context Sentences:\n{context_text}")
+            self.file_logger.info(
+                f"Embedding Similarity: {example.similarity_score:.4f}"
+            )
+            self.file_logger.info("-" * 80)
 
     def _log_to_wandb(self, epoch: int, examples: list[MonitoringExample]) -> None:
         """Log examples to Weights & Biases."""

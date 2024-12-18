@@ -129,7 +129,7 @@ def train(config: LANGJEPAConfig) -> None:
         tokenizer=config.data.tokenizer,
         log_to_wandb=True,
         num_examples=2,
-        log_every_n_epochs=1,
+        log_every_n_epochs=1
     )
 
     for epoch in range(start_epoch, epochs):

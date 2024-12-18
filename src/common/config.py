@@ -7,12 +7,8 @@ class DataConfig(BaseModel):
     batch_size: int = Field(gt=0, description="Training batch size")
     num_workers: int = Field(ge=0, description="Number of data loader workers")
     tokenizer_path: str = Field(description="Path or name of the pretrained tokenizer")
-    limit: int | None = Field(
-        default=None, gt=0, description="Limit on number of training samples"
-    )
-    min_length: int = Field(
-        default=10, gt=0, description="Minimum text length to consider"
-    )
+    limit: int = Field(gt=0, description="Limit on number of training samples")
+    min_length: int = Field(gt=0, description="Minimum text length to consider")
     tokenizer: PreTrainedTokenizer | None = Field(
         default=None, description="Loaded tokenizer instance"
     )
