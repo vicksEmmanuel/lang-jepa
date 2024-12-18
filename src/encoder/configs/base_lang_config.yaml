@@ -4,8 +4,9 @@ data:
   num_workers: 0
   # The tokenizer object isn't defined here directly. In practice, you might define a tokenizer
   # in code and attach it to cfg at runtime. Or you can specify a path to a pretrained tokenizer here.
-  tokenizer_path: "bert-base-uncased"
+#  tokenizer_path: "bert-base-uncased"
 #  tokenizer_path: "gpt2"
+  tokenizer_path: "roberta-base"
   # We'll keep limit here to control how many samples we load.
   limit: 100_000
   # Minimum text length
