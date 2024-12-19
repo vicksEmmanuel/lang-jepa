@@ -50,8 +50,9 @@ class TextDataset(Dataset):
             "split_failed": 0,
         }
 
-        # Initialize sentence splitter
-        self.sentence_splitter = SentenceSplitter(SentenceSplitterConfig())
+        # Store configuration
+        self.min_length = min_length
+        self.min_sentences = min_sentences
 
         # Load dataset
         print("Loading dataset...")
@@ -68,6 +69,9 @@ class TextDataset(Dataset):
         # Process documents
         processing_start = time.time()
         count = 0
+
+        # Create a sentence splitter for initial processing
+        splitter = SentenceSplitter(SentenceSplitterConfig())
 
         pbar = tqdm(
             total=limit if limit else None,
@@ -87,7 +91,7 @@ class TextDataset(Dataset):
 
             # Try to split into sentences
             try:
-                sentences = self.sentence_splitter([text])[0]
+                sentences = splitter([text])[0]
                 if len(sentences) < min_sentences:
                     self.stats["docs_rejected_sentences"] += 1
                     continue
@@ -104,7 +108,7 @@ class TextDataset(Dataset):
                 count += 1
                 pbar.update(1)
 
-                if count >= limit:
+                if limit and count >= limit:
                     break
 
             except Exception:
@@ -145,9 +149,15 @@ class TextDataset(Dataset):
         """Get a sample at the given index.
 
         Returns:
-            Dict containing:
+            DatasetOutput containing:
                 - context: Text before the last sentence
                 - target: The last sentence
-                - text: Complete original text
         """
         return self.samples[idx]
+
+
+def worker_init_fn(worker_id: int) -> None:
+    """Initialize any worker-specific resources."""
+    # No need for worker-specific initialization anymore since we process
+    # everything in __init__
+    pass

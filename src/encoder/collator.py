@@ -14,14 +14,18 @@ class Batch:
     target_texts: list[str]  # Target sentences to predict
 
 
-def create_collate_fn(tokenizer: PreTrainedTokenizer, max_length: int):
-    def collate_fn(batch: list[DatasetOutput]) -> Batch:
+class Collator:
+    def __init__(self, tokenizer: PreTrainedTokenizer, max_length: int):
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+
+    def __call__(self, batch: list[DatasetOutput]) -> Batch:
         contexts = [item.context for item in batch]
-        tokens = tokenizer(
+        tokens = self.tokenizer(
             contexts,
             padding=True,
             truncation=True,
-            max_length=max_length,
+            max_length=self.max_length,
             return_tensors="pt",
         )
 
@@ -31,5 +35,3 @@ def create_collate_fn(tokenizer: PreTrainedTokenizer, max_length: int):
             context_texts=contexts,
             target_texts=[item.target for item in batch],
         )
-
-    return collate_fn

@@ -1,5 +1,6 @@
 import os
 import time
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
@@ -8,15 +9,16 @@ from torch.utils.data import DataLoader
 
 import wandb
 from src.common.config import LANGJEPAConfig
-from src.common.datasets.fineweb_edu import TextDataset
+from src.common.datasets.fineweb_edu import TextDataset, worker_init_fn
 from src.common.logging import AverageMeter, CSVLogger
-from src.encoder.collator import Batch, create_collate_fn
+from src.encoder.collator import Batch, Collator
 from src.encoder.models import TextPredictor, TextTransformer
 from src.encoder.utils.helper import init_optimizer, load_checkpoint, save_checkpoint
+from src.encoder.utils.monitor import TrainingMonitor
 
 
 def train(config: LANGJEPAConfig) -> None:
-    """Main training function with type-safe config."""
+    """Main training function for LANG-JEPA next-sentence prediction."""
 
     # Initialize wandb
     load_dotenv()
@@ -46,16 +48,21 @@ def train(config: LANGJEPAConfig) -> None:
         train_file=config.data.train_file,
         limit=config.data.limit,
         min_length=config.data.min_length,
+        min_sentences=config.data.min_sentences,
     )
 
-    collate_fn = create_collate_fn(config.data.tokenizer, config.model.max_length)
+    collator = Collator(
+        tokenizer=config.data.tokenizer, max_length=config.model.max_length
+    )
+
     dataloader = DataLoader(
         dataset=dataset,
         batch_size=config.data.batch_size,
         shuffle=True,
         num_workers=config.data.num_workers,
         pin_memory=True,
-        collate_fn=collate_fn,
+        collate_fn=collator,
+        worker_init_fn=worker_init_fn,
     )
 
     # Initialize models
@@ -75,6 +82,12 @@ def train(config: LANGJEPAConfig) -> None:
         total_epochs=config.optimization.epochs,
         steps_per_epoch=len(dataloader),
         use_bfloat16=config.meta.use_bfloat16,
+    )
+
+    # Initialize training monitor
+    monitor = TrainingMonitor(
+        tokenizer=config.data.tokenizer,
+        log_dir=Path(config.logging.log_dir),
     )
 
     # Load checkpoint if specified
@@ -102,35 +115,49 @@ def train(config: LANGJEPAConfig) -> None:
             batch: Batch
             # Move batch to device
             context_ids = batch.context_ids.to(device)
-            padding_masks = batch.padding_masks.to(device)
+            context_mask = batch.padding_masks.to(device)
 
-            # Get target embeddings
-            with torch.no_grad():
-                # Tokenize targets just for getting embeddings
-                target_tokens = config.data.tokenizer(
-                    batch.target_texts,
-                    padding=True,
-                    truncation=True,
-                    return_tensors="pt",
-                ).to(device)
+            # Process target sentences
+            target_tokens = config.data.tokenizer(
+                batch.target_texts,
+                padding=True,
+                truncation=True,
+                max_length=config.model.max_length,
+                return_tensors="pt",
+            ).to(device)
 
-                target_features = encoder(
-                    target_tokens["input_ids"], target_tokens["attention_mask"]
+            # Get embeddings for both context and target
+            with torch.cuda.amp.autocast(enabled=config.meta.use_bfloat16):
+                # Get target embeddings
+                with torch.no_grad():
+                    target_features = encoder(
+                        target_tokens.input_ids,
+                        target_tokens.attention_mask,
+                    )
+                    # Average token embeddings for sentence representation
+                    target_features = target_features.mean(dim=1)
+                    target_features = predictor.project_targets(target_features)
+                    target_features = F.normalize(target_features, p=2, dim=-1)
+
+                # Get context embeddings and predict
+                context_features = encoder(context_ids, context_mask)
+                predicted_features = predictor(context_features, context_mask)
+                predicted_features = F.normalize(predicted_features, p=2, dim=-1)
+
+                # Compute loss using cosine similarity
+                loss = (
+                    1 - F.cosine_similarity(predicted_features, target_features).mean()
                 )
-                target_features = F.normalize(target_features.mean(dim=1), p=2, dim=-1)
-                target_features = predictor.project_targets(target_features)
-
-            # Get context embeddings and predict
-            context_features = encoder(context_ids, padding_masks)
-            predicted_features = predictor(context_features, padding_masks)
-
-            # Compute loss
-            loss = F.smooth_l1_loss(predicted_features, target_features)
 
             # Optimize
             optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            if scaler is not None:
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                optimizer.step()
 
             # Update schedulers
             lr = scheduler.step()
@@ -148,16 +175,35 @@ def train(config: LANGJEPAConfig) -> None:
                     f"loss: {loss_meter.avg:.4f}, lr: {lr:.2e}"
                 )
 
+                # Log metrics
                 wandb.log(
                     {
                         "train/loss": loss_val,
                         "train/learning_rate": lr,
                         "train/iteration": itr + epoch * len(dataloader),
-                        "stats/target_features_mean": target_features.mean().item(),
-                        "stats/target_features_std": target_features.std().item(),
-                        "stats/predicted_features_mean": predicted_features.mean().item(),
-                        "stats/predicted_features_std": predicted_features.std().item(),
+                        "stats/target_features_norm": target_features.norm(dim=1)
+                        .mean()
+                        .item(),
+                        "stats/predicted_features_norm": predicted_features.norm(dim=1)
+                        .mean()
+                        .item(),
+                        "stats/cosine_similarity": F.cosine_similarity(
+                            predicted_features, target_features
+                        )
+                        .mean()
+                        .item(),
                     }
+                )
+
+                # Monitor training examples
+                monitor.log_training_examples(
+                    epoch=epoch,
+                    batch_texts=batch.context_texts,
+                    target_texts=batch.target_texts,
+                    predicted_features=predicted_features.detach(),
+                    target_features=target_features.detach(),
+                    encoder=encoder,
+                    predictor=predictor,
                 )
 
         # End of epoch
