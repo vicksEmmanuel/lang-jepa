@@ -68,6 +68,9 @@ class MetaConfig(BaseModel):
     checkpoint_path: str | None = Field(
         default=None, description="Path to checkpoint file"
     )
+    use_gradient_checkpointing: bool = Field(
+        description="Whether to use gradient checkpointing"
+    )
 
 
 class LANGJEPAConfig(BaseModel):

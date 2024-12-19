@@ -25,9 +25,14 @@ class TextTransformer(nn.Module):
                 "hidden_dropout_prob": config.model.dropout,
                 "attention_probs_dropout_prob": config.model.dropout,
                 "vocab_size": len(config.data.tokenizer),
+                "gradient_checkpointing": config.meta.use_gradient_checkpointing,
             }
         )
         self.encoder = AutoModel.from_config(model_config)
+
+        # After creating encoder, enable gradient checkpointing
+        if hasattr(self.encoder, "gradient_checkpointing_enable"):
+            self.encoder.gradient_checkpointing_enable()
 
     def forward(
         self, input_ids: Tensor, attention_mask: Tensor | None = None

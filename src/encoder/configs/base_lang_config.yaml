@@ -41,3 +41,4 @@ meta:
   use_bfloat16: false                 # Whether to use bfloat16 mixed precision
   load_checkpoint: false              # Whether to load from checkpoint
   checkpoint_path: null               # Path to checkpoint if loading
+  use_gradient_checkpointing: false

@@ -150,7 +150,7 @@ class TrainingMonitor:
 
             # Print the table to console and log to file
             panel = Panel(table, title=f"Example {i}", border_style="blue")
-            self.console.print(panel)
+            self.file_logger.info(panel)
             self.file_logger.info(f"\nExample {i}:")
             self.file_logger.info(f"Context: {example.context_text}")
             self.file_logger.info(f"Target: {example.target_text}")
