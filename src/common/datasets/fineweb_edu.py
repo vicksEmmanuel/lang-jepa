@@ -1,14 +1,21 @@
-import time
 from dataclasses import dataclass
 
 from datasets import load_dataset
 from torch.utils.data import Dataset
 from tqdm.auto import tqdm
+from transformers import PreTrainedTokenizer
 
 from src.common.datasets.utils.sentence_splitting import (
     SentenceSplitter,
     SentenceSplitterConfig,
 )
+
+
+@dataclass
+class Sentence:
+    text: str
+    start_idx: int
+    end_idx: int
 
 
 @dataclass
@@ -24,39 +31,36 @@ class TextDataset(Dataset):
         train_file: str,
         limit: int | None,
         min_length: int,
+        window_size: int = 25,
         min_sentences: int = 2,
+        tokenizer: PreTrainedTokenizer | None = None,
+        max_tokens: int | None = None,
         cache_dir: str = "~/.cache/huggingface/datasets",
     ):
-        """A dataset wrapper for FineWeb-Edu that splits text into context/target pairs.
+        """Enhanced dataset wrapper with precise sentence boundary handling.
 
         Args:
-            train_file: Which subset of FineWeb-Edu to load (e.g., "CC-MAIN-2024-10")
-            limit: Number of documents to load from streaming dataset
-            min_length: Minimum text length to consider a sample valid
-            min_sentences: Minimum number of sentences required (default: 2)
-            cache_dir: Directory for caching HuggingFace datasets
+            train_file: Which dataset file to load
+            limit: Number of documents to process
+            min_length: Minimum text length to consider
+            window_size: Number of sentences to use as context (default: 25)
+            min_sentences: Minimum sentences required (default: 2)
+            tokenizer: Optional tokenizer for length checking
+            max_tokens: Optional maximum tokens per context window
+            cache_dir: HuggingFace cache directory
         """
-        total_start = time.time()
-
-        # Initialize metrics
         self.samples: list[DatasetOutput] = []
         self.stats = {
-            "dataset_load_time": 0,
-            "processing_time": 0,
-            "total_docs_processed": 0,
-            "docs_accepted": 0,
+            "total_docs": 0,
+            "docs_processed": 0,
             "docs_rejected_length": 0,
             "docs_rejected_sentences": 0,
-            "split_failed": 0,
+            "context_target_pairs": 0,
+            "pairs_rejected_length": 0,
         }
 
-        # Store configuration
-        self.min_length = min_length
-        self.min_sentences = min_sentences
-
         # Load dataset
-        print("Loading dataset...")
-        load_start = time.time()
+        print(f"Loading dataset with {window_size}-sentence sliding window...")
         ds = load_dataset(
             path="HuggingFaceFW/fineweb-edu",
             name=train_file,
@@ -64,24 +68,15 @@ class TextDataset(Dataset):
             streaming=True,
             cache_dir=cache_dir,
         )
-        self.stats["dataset_load_time"] = time.time() - load_start
 
-        # Process documents
-        processing_start = time.time()
-        count = 0
-
-        # Create a sentence splitter for initial processing
+        # Initialize sentence splitter
         splitter = SentenceSplitter(SentenceSplitterConfig())
 
-        pbar = tqdm(
-            total=limit if limit else None,
-            desc="Processing documents",
-            unit="docs",
-            dynamic_ncols=True,
-        )
+        # Process documents
+        pbar = tqdm(total=limit, desc="Processing documents", unit="docs")
 
         for doc in ds:
-            self.stats["total_docs_processed"] += 1
+            self.stats["total_docs"] += 1
             text = doc.get("text", "").strip()
 
             # Check minimum length
@@ -89,70 +84,89 @@ class TextDataset(Dataset):
                 self.stats["docs_rejected_length"] += 1
                 continue
 
-            # Try to split into sentences
             try:
+                # Split into sentences
                 sentences = splitter([text])[0]
                 if len(sentences) < min_sentences:
                     self.stats["docs_rejected_sentences"] += 1
                     continue
 
-                # Find and split at last sentence
-                split_idx = text.rindex(sentences[-1])
-                self.samples.append(
-                    DatasetOutput(
-                        context=text[:split_idx],
-                        target=text[split_idx:],
+                # Find sentence boundaries in original text
+                sentence_objs: list[Sentence] = []
+                search_start = 0
+
+                for sent in sentences:
+                    # Find the sentence in the original text
+                    start_idx = text.index(sent, search_start)
+                    end_idx = start_idx + len(sent)
+
+                    sentence_objs.append(
+                        Sentence(text=sent, start_idx=start_idx, end_idx=end_idx)
                     )
-                )
-                self.stats["docs_accepted"] += 1
-                count += 1
+                    search_start = end_idx
+
+                # Create context-target pairs with sliding window
+                for i in range(1, len(sentence_objs)):
+                    # Get previous sentences as context (up to window_size)
+                    start_sent_idx = max(0, i - window_size)
+
+                    # Get exact text slice from original document
+                    context_start = sentence_objs[start_sent_idx].start_idx
+                    context_end = sentence_objs[i - 1].end_idx
+                    context = text[context_start:context_end]
+
+                    # Get target sentence with exact boundaries
+                    target = text[sentence_objs[i].start_idx : sentence_objs[i].end_idx]
+
+                    # Check token length if tokenizer provided
+                    if tokenizer and max_tokens:
+                        context_tokens = len(tokenizer.encode(context))
+                        if context_tokens > max_tokens:
+                            self.stats["pairs_rejected_length"] += 1
+                            continue
+
+                    self.samples.append(
+                        DatasetOutput(
+                            context=context,
+                            target=target,
+                        )
+                    )
+                    self.stats["context_target_pairs"] += 1
+
+                self.stats["docs_processed"] += 1
                 pbar.update(1)
 
-                if limit and count >= limit:
+                if limit and self.stats["docs_processed"] >= limit:
                     break
 
-            except Exception:
-                self.stats["split_failed"] += 1
+            except Exception as e:
+                print(f"Error processing document: {e}")
+                continue
 
         pbar.close()
-        self.stats["processing_time"] = time.time() - processing_start
-        total_time = time.time() - total_start
+
+        # Print statistics
+        print("\nDataset Processing Statistics:")
+        print(f"Total documents seen: {self.stats['total_docs']:,}")
+        print(f"Documents processed: {self.stats['docs_processed']:,}")
+        print(f"Documents rejected (length): {self.stats['docs_rejected_length']:,}")
+        print(
+            f"Documents rejected (sentences): {self.stats['docs_rejected_sentences']:,}"
+        )
+        print(f"Context-target pairs generated: {self.stats['context_target_pairs']:,}")
+        print(f"Pairs rejected (length): {self.stats['pairs_rejected_length']:,}")
 
         if not self.samples:
             raise RuntimeError(
-                f"No valid samples found in FineWeb-Edu ({train_file}). "
-                f"Processed {self.stats['total_docs_processed']:,} documents:\n"
-                f"- Rejected (length < {min_length}): {self.stats['docs_rejected_length']:,}\n"
-                f"- Rejected (sentences < {min_sentences}): {self.stats['docs_rejected_sentences']:,}\n"
-                f"- Split failed: {self.stats['split_failed']:,}"
+                f"No valid samples found in dataset ({train_file}). "
+                f"Try adjusting the minimum length ({min_length}) or "
+                f"minimum sentences ({min_sentences}) requirements."
             )
-
-        # Print detailed timing report
-        print("\nDataset Loading Complete:")
-        print(f"- Dataset load time: {self.stats['dataset_load_time']:.2f}s")
-        print(f"- Document processing time: {self.stats['processing_time']:.2f}s")
-        print(f"- Total time: {total_time:.2f}s")
-        print("\nDocument Statistics:")
-        print(f"- Total documents processed: {self.stats['total_docs_processed']:,}")
-        print(f"- Documents accepted: {self.stats['docs_accepted']:,}")
-        print(f"- Rejected (length): {self.stats['docs_rejected_length']:,}")
-        print(f"- Rejected (sentences): {self.stats['docs_rejected_sentences']:,}")
-        print(f"- Split failed: {self.stats['split_failed']:,}")
-        print(
-            f"- Processing rate: {self.stats['total_docs_processed']/self.stats['processing_time']:.1f} docs/sec"
-        )
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> DatasetOutput:
-        """Get a sample at the given index.
-
-        Returns:
-            DatasetOutput containing:
-                - context: Text before the last sentence
-                - target: The last sentence
-        """
         return self.samples[idx]
 
 
