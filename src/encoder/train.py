@@ -88,6 +88,7 @@ def train(config: LANGJEPAConfig) -> None:
     monitor = TrainingMonitor(
         tokenizer=config.data.tokenizer,
         log_dir=Path(config.logging.log_dir),
+        log_to_wandb=True,
     )
 
     # Load checkpoint if specified
@@ -204,6 +205,11 @@ def train(config: LANGJEPAConfig) -> None:
                     target_features=target_features.detach(),
                     encoder=encoder,
                     predictor=predictor,
+                )
+                monitor.log_validation_metrics(
+                    epoch=epoch,
+                    pred_embeddings=predicted_features,
+                    target_embeddings=target_features,
                 )
 
         # End of epoch

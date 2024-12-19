@@ -9,9 +9,21 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from torch import Tensor
 from transformers import PreTrainedTokenizer
 
 import wandb
+
+"""
+These metrics will help you understand:
+
+Semantic Similarity (avg_similarity): How close your predictions are to the actual next sentence embeddings
+Hit Rate: Whether your model can distinguish the true next sentence from other sentences in the batch
+Embedding Norms: If your embeddings are maintaining reasonable magnitudes
+Embedding Diversity: If your embeddings are maintaining good separation or collapsing
+
+Low hit rate but high similarity might indicate your model is making "safe" but overly general predictions. Low diversity might indicate embedding collapse. You can use these insights to tune your architecture or training process.
+"""
 
 
 @dataclass
@@ -20,13 +32,76 @@ class MonitoringExample:
 
     context_text: str
     target_text: str
-    predicted_embedding: torch.Tensor
-    target_embedding: torch.Tensor
+    predicted_embedding: Tensor
+    target_embedding: Tensor
     similarity_score: float
 
 
+class ValidationMetrics:
+    """Tracks validation metrics for JEPA model evaluation."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        """Reset all metric counters."""
+        self.total_samples = 0
+        self.metrics = {
+            "semantic/avg_similarity": 0.0,
+            "semantic/hit_rate": 0.0,
+            "embeddings/norm": 0.0,
+            "embeddings/diversity": 0.0,
+        }
+
+    def update(self, pred_embeddings: Tensor, target_embeddings: Tensor):
+        """Update metrics with new batch of embeddings."""
+        batch_size = pred_embeddings.shape[0]
+
+        # Compute cosine similarity
+        sim_scores = F.cosine_similarity(pred_embeddings, target_embeddings)
+        avg_sim = sim_scores.mean().item()
+
+        # Compute contrastive accuracy (hit rate)
+        sim_matrix = torch.matmul(pred_embeddings, target_embeddings.T)
+        correct_matches = sim_matrix.argmax(dim=-1) == torch.arange(
+            len(pred_embeddings), device=pred_embeddings.device
+        )
+        hit_rate = correct_matches.float().mean().item()
+
+        # Compute embedding norms
+        norms = torch.norm(pred_embeddings, dim=-1).mean().item()
+
+        # Compute embedding diversity
+        cosine_sim_matrix = torch.matmul(pred_embeddings, pred_embeddings.T)
+        mask = ~torch.eye(batch_size, dtype=torch.bool, device=pred_embeddings.device)
+        diversity = 1 - cosine_sim_matrix[mask].mean().item()
+
+        # Update running averages
+        weight = batch_size / (self.total_samples + batch_size)
+        old_weight = 1 - weight
+
+        self.metrics["semantic/avg_similarity"] = (
+            old_weight * self.metrics["semantic/avg_similarity"] + weight * avg_sim
+        )
+        self.metrics["semantic/hit_rate"] = (
+            old_weight * self.metrics["semantic/hit_rate"] + weight * hit_rate
+        )
+        self.metrics["embeddings/norm"] = (
+            old_weight * self.metrics["embeddings/norm"] + weight * norms
+        )
+        self.metrics["embeddings/diversity"] = (
+            old_weight * self.metrics["embeddings/diversity"] + weight * diversity
+        )
+
+        self.total_samples += batch_size
+
+    def get_metrics(self) -> dict[str, float]:
+        """Return current metrics."""
+        return self.metrics.copy()
+
+
 class TrainingMonitor:
-    """Monitors and logs training progress for next-sentence prediction."""
+    """Monitors and logs training progress for JEPA model."""
 
     def __init__(
         self,
@@ -42,6 +117,7 @@ class TrainingMonitor:
         self.log_every_n_epochs = log_every_n_epochs
         self.log_to_wandb = log_to_wandb
         self.console = Console()
+        self.validation_metrics = ValidationMetrics()
 
         # Create log directory
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -72,22 +148,12 @@ class TrainingMonitor:
         epoch: int,
         batch_texts: list[str],
         target_texts: list[str],
-        predicted_features: torch.Tensor,
-        target_features: torch.Tensor,
+        predicted_features: Tensor,
+        target_features: Tensor,
         encoder: torch.nn.Module,
         predictor: torch.nn.Module,
     ) -> None:
-        """Log training examples showing next-sentence prediction performance.
-
-        Args:
-            epoch: Current training epoch
-            batch_texts: List of context texts
-            target_texts: List of target (next sentence) texts
-            predicted_features: Predicted embeddings from the model
-            target_features: True target embeddings
-            encoder: The encoder model (for additional analysis if needed)
-            predictor: The predictor model (for additional analysis if needed)
-        """
+        """Log training examples showing next-sentence prediction performance."""
         if epoch % self.log_every_n_epochs != 0:
             return
 
@@ -158,7 +224,8 @@ class TrainingMonitor:
             self.file_logger.info("-" * 80)
 
     def _log_to_wandb(self, epoch: int, examples: list[MonitoringExample]) -> None:
-        """Log examples to Weights & Biases."""
+        """Log examples and metrics to Weights & Biases."""
+        # Log examples
         for i, example in enumerate(examples):
             wandb.log(
                 {
@@ -181,3 +248,45 @@ class TrainingMonitor:
                         "epoch": epoch,
                     }
                 )
+
+    def log_validation_metrics(
+        self,
+        epoch: int,
+        pred_embeddings: Tensor,
+        target_embeddings: Tensor,
+    ) -> None:
+        """Log validation metrics for the current batch."""
+        # Update metrics
+        self.validation_metrics.update(pred_embeddings, target_embeddings)
+
+        # Get current metrics
+        metrics = self.validation_metrics.get_metrics()
+
+        # Log to console with rich table
+        self.console.print("\nValidation Metrics:")
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="green")
+
+        for name, value in metrics.items():
+            table.add_row(name, f"{value:.4f}")
+
+        self.console.print(table)
+
+        # Log to wandb if enabled
+        if self.log_to_wandb:
+            wandb.log({f"val/{k}": v for k, v in metrics.items()})
+            wandb.log({"epoch": epoch})
+
+        # Log to file
+        self.file_logger.info(f"\nValidation Metrics (Epoch {epoch}):")
+        for name, value in metrics.items():
+            self.file_logger.info(f"{name}: {value:.4f}")
+
+    def get_current_metrics(self) -> dict[str, float]:
+        """Return current validation metrics."""
+        return self.validation_metrics.get_metrics()
+
+    def reset_validation_metrics(self) -> None:
+        """Reset validation metrics for new epoch."""
+        self.validation_metrics.reset()
