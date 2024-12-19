@@ -1,27 +1,15 @@
 data:
   train_file: "sample-10BT"
   batch_size: 32
-  num_workers: 0
-  # The tokenizer object isn't defined here directly. In practice, you might define a tokenizer
-  # in code and attach it to cfg at runtime. Or you can specify a path to a pretrained tokenizer here.
-#  tokenizer_path: "bert-base-uncased"
-#  tokenizer_path: "gpt2"
+  num_workers: 4
   tokenizer_path: "roberta-base"
-  # We'll keep limit here to control how many samples we load.
-  limit: 100_000
-  # Minimum text length
+  limit: 100
   min_length: 100
-
-mask:
-  # Ratio of sentences to mask.
-  mask_ratio: 0.15
+  min_sentences: 2
 
 model:
-  # Name or type of model architecture
-  model_name: "lang-base"
   max_length: 512
   pred_dim: 384
-  # If needed, you can define architecture parameters here if you want the text_transformer to read from cfg
   embed_dim: 768
   num_layers: 12
   num_heads: 12
