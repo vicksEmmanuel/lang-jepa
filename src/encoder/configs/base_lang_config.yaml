@@ -1,47 +1,44 @@
 data:
-  train_file: "sample-10BT"
+  # Dataset configuration
+  train_file: "sample-10BT"  # FineWeb-Edu dataset file
   batch_size: 32
-  num_workers: 0
-  # The tokenizer object isn't defined here directly. In practice, you might define a tokenizer
-  # in code and attach it to cfg at runtime. Or you can specify a path to a pretrained tokenizer here.
+  num_workers: 4
+  tokenizer_path: "roberta-base"  # Base tokenizer to use
 #  tokenizer_path: "bert-base-uncased"
 #  tokenizer_path: "gpt2"
-  tokenizer_path: "roberta-base"
-  # We'll keep limit here to control how many samples we load.
-  limit: 100_000
-  # Minimum text length
-  min_length: 100
-
-mask:
-  # Ratio of sentences to mask.
-  mask_ratio: 0.15
+  limit: 100  # Number of training samples to use
+  min_length: 100  # Minimum text length to consider
+  min_sentences: 2  # Minimum number of sentences (needed for context/target split)
 
 model:
-  # Name or type of model architecture
-  model_name: "lang-base"
-  max_length: 512
+  max_length: 128  # Should be smaller, around 128-256
   pred_dim: 384
-  # If needed, you can define architecture parameters here if you want the text_transformer to read from cfg
-  embed_dim: 768
+  embed_dim: 768   # Standard size for base models
   num_layers: 12
   num_heads: 12
   mlp_ratio: 4.0
   dropout: 0.1
 
 optimization:
+  # Training parameters
   epochs: 5
-  lr: 0.001
-  warmup: 1
-  weight_decay: 0.04
-  final_weight_decay: 0.4
-  final_lr: 0.000001
+  lr: 0.001              # Peak learning rate
+  warmup: 1              # Warmup epochs
+  weight_decay: 0.04     # Initial weight decay
+  final_weight_decay: 0.4  # Final weight decay
+  final_lr: 0.000001     # Final learning rate after decay
 
 logging:
-  log_dir: "logs/lang_jepa_exp1"
-  log_freq: 50
-  checkpoint_freq: 1
+  # Logging configuration
+  log_dir: "logs/lang_jepa"  # Directory for saving logs and checkpoints
+  log_freq: 50               # How often to log training metrics (iterations)
+  checkpoint_freq: 1         # How often to save checkpoints (epochs)
+  num_examples: 3            # Number of examples to monitor during training
+  log_to_wandb: true        # Whether to log to Weights & Biases
 
 meta:
-  use_bfloat16: false
-  load_checkpoint: false
-  checkpoint_path: null
+  # Mixed precision and checkpointing
+  use_bfloat16: false                 # Whether to use bfloat16 mixed precision
+  load_checkpoint: false              # Whether to load from checkpoint
+  checkpoint_path: null               # Path to checkpoint if loading
+  use_gradient_checkpointing: false

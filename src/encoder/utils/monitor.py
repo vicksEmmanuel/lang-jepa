@@ -9,45 +9,124 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from torch import Tensor
 from transformers import PreTrainedTokenizer
 
 import wandb
-from src.common.datasets.utils.sentence_splitting import (
-    SentenceSplitter,
-    SentenceSplitterConfig,
-)
+
+"""
+These metrics will help you understand:
+
+Semantic Similarity (avg_similarity): How close your predictions are to the actual next sentence embeddings
+Hit Rate: Whether your model can distinguish the true next sentence from other sentences in the batch
+Embedding Norms: If your embeddings are maintaining reasonable magnitudes
+Embedding Diversity: If your embeddings are maintaining good separation or collapsing
+
+Low hit rate but high similarity might indicate your model is making "safe" but overly general predictions. Low diversity might indicate embedding collapse. You can use these insights to tune your architecture or training process.
+"""
 
 
 @dataclass
 class MonitoringExample:
-    original_text: str
-    masked_sentences: list[str]
-    context_sentences: list[str]
-    target_embeddings: torch.Tensor
-    predicted_embeddings: torch.Tensor
+    """Holds information for a single monitoring example."""
+
+    context_text: str
+    target_text: str
+    predicted_embedding: Tensor
+    target_embedding: Tensor
     similarity_score: float
 
 
+class ValidationMetrics:
+    """Tracks validation metrics for JEPA model evaluation."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        """Reset all metric counters."""
+        self.total_samples = 0
+        self.metrics = {
+            "semantic/avg_similarity": 0.0,
+            "semantic/hit_rate": 0.0,
+            "embeddings/norm": 0.0,
+            "embeddings/diversity": 0.0,
+        }
+
+    def update(self, pred_embeddings: Tensor, target_embeddings: Tensor):
+        """Update metrics with new batch of embeddings."""
+        batch_size = pred_embeddings.shape[0]
+
+        # Compute cosine similarity
+        sim_scores = F.cosine_similarity(pred_embeddings, target_embeddings)
+        avg_sim = sim_scores.mean().item()
+
+        # Compute contrastive accuracy (hit rate)
+        sim_matrix = torch.matmul(pred_embeddings, target_embeddings.T)
+        correct_matches = sim_matrix.argmax(dim=-1) == torch.arange(
+            len(pred_embeddings), device=pred_embeddings.device
+        )
+        hit_rate = correct_matches.float().mean().item()
+
+        # Compute embedding norms
+        norms = torch.norm(pred_embeddings, dim=-1).mean().item()
+
+        # Compute embedding diversity
+        cosine_sim_matrix = torch.matmul(pred_embeddings, pred_embeddings.T)
+        mask = ~torch.eye(batch_size, dtype=torch.bool, device=pred_embeddings.device)
+        diversity = 1 - cosine_sim_matrix[mask].mean().item()
+
+        # Update running averages
+        weight = batch_size / (self.total_samples + batch_size)
+        old_weight = 1 - weight
+
+        self.metrics["semantic/avg_similarity"] = (
+            old_weight * self.metrics["semantic/avg_similarity"] + weight * avg_sim
+        )
+        self.metrics["semantic/hit_rate"] = (
+            old_weight * self.metrics["semantic/hit_rate"] + weight * hit_rate
+        )
+        self.metrics["embeddings/norm"] = (
+            old_weight * self.metrics["embeddings/norm"] + weight * norms
+        )
+        self.metrics["embeddings/diversity"] = (
+            old_weight * self.metrics["embeddings/diversity"] + weight * diversity
+        )
+
+        self.total_samples += batch_size
+
+    def get_metrics(self) -> dict[str, float]:
+        """Return current metrics."""
+        return self.metrics.copy()
+
+
 class TrainingMonitor:
+    """Monitors and logs training progress for JEPA model."""
+
     def __init__(
         self,
         tokenizer: PreTrainedTokenizer,
-        log_to_wandb: bool = True,
+        log_dir: Path = Path("logs/monitor_logs"),
         num_examples: int = 3,
         log_every_n_epochs: int = 1,
-        log_dir: Path = Path("logs/monitor_logs"),
+        log_to_wandb: bool = True,
     ):
         self.tokenizer = tokenizer
-        self.log_to_wandb = log_to_wandb
+        self.log_dir = Path(log_dir)
         self.num_examples = num_examples
         self.log_every_n_epochs = log_every_n_epochs
+        self.log_to_wandb = log_to_wandb
         self.console = Console()
-        self.sentence_splitter = SentenceSplitter(SentenceSplitterConfig())
+        self.validation_metrics = ValidationMetrics()
 
-        # Set up logging
-        self.log_dir = log_dir
-        self.log_dir.mkdir(exist_ok=True, parents=True)
+        # Create log directory
+        self.log_dir.mkdir(parents=True, exist_ok=True)
 
+        # Set up loggers
+        self._setup_loggers()
+
+    def _setup_loggers(self):
+        """Initialize different loggers for console and file output."""
         # Console logger
         self.console_logger = logging.getLogger("console")
         console_handler = logging.StreamHandler(sys.stdout)
@@ -64,119 +143,32 @@ class TrainingMonitor:
         self.file_logger.addHandler(file_handler)
         self.file_logger.setLevel(logging.INFO)
 
-        # Debug logger
-        self.debug_logger = logging.getLogger("debug")
-        debug_handler = logging.StreamHandler(sys.stdout)
-        debug_formatter = logging.Formatter("[DEBUG] %(message)s")
-        debug_handler.setFormatter(debug_formatter)
-        self.debug_logger.addHandler(debug_handler)
-        self.debug_logger.setLevel(logging.DEBUG)
-
-    def _map_token_to_sentence_indices(
-        self,
-        sentences: list[str],
-        input_ids: torch.Tensor,
-        mask_token_indices: list[int],
-    ) -> set[int]:
-        """Maps token indices to sentence indices."""
-        # Tokenize each sentence individually to create mapping
-        sentence_boundaries = []
-        current_pos = 1  # Start after CLS token
-
-        for sent in sentences:
-            tokens = self.tokenizer.encode(sent, add_special_tokens=False)
-            sentence_boundaries.append((current_pos, current_pos + len(tokens)))
-            current_pos += len(tokens)
-
-        # Find which sentences contain the mask tokens
-        masked_sentence_indices = set()
-        for mask_idx in mask_token_indices:
-            for sent_idx, (start, end) in enumerate(sentence_boundaries):
-                if start <= mask_idx <= end:
-                    masked_sentence_indices.add(sent_idx)
-                    break
-
-        return masked_sentence_indices
-
     def log_training_examples(
         self,
         epoch: int,
         batch_texts: list[str],
-        mask_output,
-        encoder,
-        predictor,
-        device: torch.device,
+        target_texts: list[str],
+        predicted_features: Tensor,
+        target_features: Tensor,
+        encoder: torch.nn.Module,
+        predictor: torch.nn.Module,
     ) -> None:
+        """Log training examples showing next-sentence prediction performance."""
         if epoch % self.log_every_n_epochs != 0:
             return
 
         examples = []
-
         for idx in range(min(self.num_examples, len(batch_texts))):
-            # Get original text and split into sentences
-            original_text = batch_texts[idx]
-            sentences = self.sentence_splitter([original_text])[0]
-
-            # Debug logs
-            self.debug_logger.debug(f"Debug for example {idx}:")
-            self.debug_logger.debug(f"Pred masks: {mask_output.pred_masks[idx]}")
-            self.debug_logger.debug(
-                f"Input IDs shape: {mask_output.input_ids[idx].shape}"
-            )
-
-            # Map token indices to sentence indices
-            mask_indices = self._map_token_to_sentence_indices(
-                sentences, mask_output.input_ids[idx], mask_output.pred_masks[idx]
-            )
-
-            # Separate masked and context sentences
-            masked_sentences = [
-                sent for i, sent in enumerate(sentences) if i in mask_indices
-            ]
-            context_sentences = [
-                sent for i, sent in enumerate(sentences) if i not in mask_indices
-            ]
-
-            # More debug logs
-            self.debug_logger.debug(f"Total sentences: {len(sentences)}")
-            self.debug_logger.debug(f"Masked indices: {mask_indices}")
-            self.debug_logger.debug(
-                f"Number of masked sentences: {len(masked_sentences)}"
-            )
-            self.debug_logger.debug(
-                f"Number of context sentences: {len(context_sentences)}"
-            )
-
-            with torch.no_grad():
-                target_features = encoder(
-                    mask_output.input_ids[idx : idx + 1].to(device),
-                    mask_output.attention_mask[idx : idx + 1].to(device),
-                )
-                target_feats = target_features[0, mask_output.pred_masks[idx]]
-                target_embeddings = predictor.project_targets(target_feats)
-
-                context_features = encoder(
-                    mask_output.input_ids[idx : idx + 1].to(device),
-                    mask_output.attention_mask[idx : idx + 1].to(device),
-                )
-                predicted_embeddings = predictor(
-                    context_features,
-                    [mask_output.enc_masks[idx]],
-                    [mask_output.pred_masks[idx]],
-                )
-
-            similarity = (
-                F.cosine_similarity(predicted_embeddings, target_embeddings, dim=1)
-                .mean()
-                .item()
-            )
+            # Calculate cosine similarity for this example
+            similarity = F.cosine_similarity(
+                predicted_features[idx : idx + 1], target_features[idx : idx + 1], dim=1
+            ).item()
 
             example = MonitoringExample(
-                original_text=original_text,
-                masked_sentences=masked_sentences,
-                context_sentences=context_sentences,
-                target_embeddings=target_embeddings.cpu(),
-                predicted_embeddings=predicted_embeddings.cpu(),
+                context_text=batch_texts[idx],
+                target_text=target_texts[idx],
+                predicted_embedding=predicted_features[idx].cpu(),
+                target_embedding=target_features[idx].cpu(),
                 similarity_score=similarity,
             )
             examples.append(example)
@@ -186,9 +178,8 @@ class TrainingMonitor:
             self._log_to_wandb(epoch, examples)
 
     def _display_examples(self, epoch: int, examples: list[MonitoringExample]) -> None:
-        """Display examples in a rich formatted table with horizontal lines."""
-        # Log the header to file
-        self.file_logger.info(f"=== Training Examples (Epoch {epoch}) ===")
+        """Display training examples in a formatted table."""
+        self.file_logger.info(f"\n=== Training Examples (Epoch {epoch}) ===")
 
         for i, example in enumerate(examples, 1):
             table = Table(
@@ -197,64 +188,105 @@ class TrainingMonitor:
             table.add_column("Type", style="cyan", width=20)
             table.add_column("Content", style="green")
 
-            # Escape markup in original text
-            escaped_original = escape(example.original_text)
-            chunks = [
-                escaped_original[i : i + 100]
-                for i in range(0, len(escaped_original), 100)
+            # Format context text for display
+            escaped_context = escape(example.context_text)
+            context_chunks = [
+                escaped_context[i : i + 100]
+                for i in range(0, len(escaped_context), 100)
             ]
-            table.add_row("Original Text", "\n".join(chunks))
+            table.add_row("Context", "\n".join(context_chunks))
 
-            # Escape markup in masked sentences
-            escaped_masked_sentences = [
-                escape(sent) for sent in example.masked_sentences
+            # Format target text
+            escaped_target = escape(example.target_text)
+            target_chunks = [
+                escaped_target[i : i + 100] for i in range(0, len(escaped_target), 100)
             ]
-            masked_text = "\n".join(
-                f"{idx + 1}. {sent}"
-                for idx, sent in enumerate(escaped_masked_sentences)
-            )
-            table.add_row("Masked Sentences", masked_text or "No masked sentences")
+            table.add_row("Target (Next Sentence)", "\n".join(target_chunks))
 
-            # Escape markup in context sentences
-            escaped_context_sentences = [
-                escape(sent) for sent in example.context_sentences
-            ]
-            context_text = "\n".join(
-                f"{idx + 1}. {sent}"
-                for idx, sent in enumerate(escaped_context_sentences)
-            )
-            table.add_row("Context Sentences", context_text or "No context sentences")
+            # Add similarity score
+            table.add_row("Cosine Similarity", f"{example.similarity_score:.4f}")
 
-            table.add_row("Embedding Similarity", f"{example.similarity_score:.4f}")
-
-            # Print the table to console
-            self.file_logger.info(
-                Panel(table, title=f"Example {i}", border_style="blue")
+            # Add embedding statistics
+            pred_norm = example.predicted_embedding.norm().item()
+            target_norm = example.target_embedding.norm().item()
+            table.add_row(
+                "Embedding Stats",
+                f"Predicted norm: {pred_norm:.4f}\nTarget norm: {target_norm:.4f}",
             )
 
-            # Log example details to file
+            # Print the table to console and log to file
+            panel = Panel(table, title=f"Example {i}", border_style="blue")
+            self.file_logger.info(panel)
             self.file_logger.info(f"\nExample {i}:")
-            self.file_logger.info(f"Original Text: {example.original_text}")
-            self.file_logger.info(f"Masked Sentences:\n{masked_text}")
-            self.file_logger.info(f"Context Sentences:\n{context_text}")
-            self.file_logger.info(
-                f"Embedding Similarity: {example.similarity_score:.4f}"
-            )
+            self.file_logger.info(f"Context: {example.context_text}")
+            self.file_logger.info(f"Target: {example.target_text}")
+            self.file_logger.info(f"Similarity: {example.similarity_score:.4f}")
             self.file_logger.info("-" * 80)
 
     def _log_to_wandb(self, epoch: int, examples: list[MonitoringExample]) -> None:
-        """Log examples to Weights & Biases."""
+        """Log examples and metrics to Weights & Biases."""
+        # Log examples
         for i, example in enumerate(examples):
             wandb.log(
                 {
-                    f"examples/original_text_{i}": example.original_text,
-                    f"examples/masked_sentences_{i}": "\n".join(
-                        example.masked_sentences
-                    ),
-                    f"examples/context_sentences_{i}": "\n".join(
-                        example.context_sentences
-                    ),
-                    f"examples/embedding_similarity_{i}": example.similarity_score,
+                    f"examples/context_{i}": example.context_text,
+                    f"examples/target_{i}": example.target_text,
+                    f"examples/similarity_{i}": example.similarity_score,
+                    f"examples/pred_norm_{i}": example.predicted_embedding.norm().item(),
+                    f"examples/target_norm_{i}": example.target_embedding.norm().item(),
                     "epoch": epoch,
                 }
             )
+
+            # Create similarity histogram for this batch
+            if i == 0:  # Only do this once per batch
+                wandb.log(
+                    {
+                        "similarity_distribution": wandb.Histogram(
+                            [e.similarity_score for e in examples]
+                        ),
+                        "epoch": epoch,
+                    }
+                )
+
+    def log_validation_metrics(
+        self,
+        epoch: int,
+        pred_embeddings: Tensor,
+        target_embeddings: Tensor,
+    ) -> None:
+        """Log validation metrics for the current batch."""
+        # Update metrics
+        self.validation_metrics.update(pred_embeddings, target_embeddings)
+
+        # Get current metrics
+        metrics = self.validation_metrics.get_metrics()
+
+        # Log to console with rich table
+        self.console.print("\nValidation Metrics:")
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="green")
+
+        for name, value in metrics.items():
+            table.add_row(name, f"{value:.4f}")
+
+        self.console.print(table)
+
+        # Log to wandb if enabled
+        if self.log_to_wandb:
+            wandb.log({f"val/{k}": v for k, v in metrics.items()})
+            wandb.log({"epoch": epoch})
+
+        # Log to file
+        self.file_logger.info(f"\nValidation Metrics (Epoch {epoch}):")
+        for name, value in metrics.items():
+            self.file_logger.info(f"{name}: {value:.4f}")
+
+    def get_current_metrics(self) -> dict[str, float]:
+        """Return current validation metrics."""
+        return self.validation_metrics.get_metrics()
+
+    def reset_validation_metrics(self) -> None:
+        """Reset validation metrics for new epoch."""
+        self.validation_metrics.reset()

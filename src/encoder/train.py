@@ -1,43 +1,28 @@
-import math
 import os
 import time
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from devtools import debug
 from dotenv import load_dotenv
 from torch.utils.data import DataLoader
 
 import wandb
 from src.common.config import LANGJEPAConfig
-from src.common.datasets.fineweb_edu import TextDataset
+from src.common.datasets.fineweb_edu import TextDataset, worker_init_fn
 from src.common.logging import AverageMeter, CSVLogger
-from src.encoder.mask_collator import LangMaskCollator, MaskOutput
-from src.encoder.models import (
-    TextPredictor,
-    TextTransformer,
-    extract_features_for_masks,
-)
-from src.encoder.utils.helper import (
-    init_optimizer,
-    load_checkpoint,
-    save_checkpoint,
-)
+from src.encoder.collator import Batch, Collator
+from src.encoder.models import TextPredictor, TextTransformer
+from src.encoder.utils.helper import init_optimizer, load_checkpoint, save_checkpoint
 from src.encoder.utils.monitor import TrainingMonitor
-
-load_dotenv()
-
-wandb.login(key=os.environ["WANDB_API_KEY"])
 
 
 def train(config: LANGJEPAConfig) -> None:
-    """
-    Main training function with type-safe config
+    """Main training function for LANG-JEPA next-sentence prediction."""
 
-    Args:
-        config: Validated LANGJEPAConfig instance
-    """
     # Initialize wandb
+    load_dotenv()
+    wandb.login(key=os.environ["WANDB_API_KEY"])
     wandb.init(
         project="lang-jepa",
         config=config.model_dump(),
@@ -58,21 +43,18 @@ def train(config: LANGJEPAConfig) -> None:
         ("%.2f", "time(ms)"),
     )
 
-    # Initialize dataset
+    # Initialize dataset and dataloader
     dataset = TextDataset(
         train_file=config.data.train_file,
         limit=config.data.limit,
         min_length=config.data.min_length,
+        min_sentences=config.data.min_sentences,
     )
 
-    # Initialize collator
-    collator = LangMaskCollator(
-        tokenizer=config.data.tokenizer,
-        mask_ratio=config.mask.mask_ratio,
-        max_length=config.model.max_length,
+    collator = Collator(
+        tokenizer=config.data.tokenizer, max_length=config.model.max_length
     )
 
-    # Initialize dataloader
     dataloader = DataLoader(
         dataset=dataset,
         batch_size=config.data.batch_size,
@@ -80,18 +62,17 @@ def train(config: LANGJEPAConfig) -> None:
         num_workers=config.data.num_workers,
         pin_memory=True,
         collate_fn=collator,
+        worker_init_fn=worker_init_fn,
     )
 
-    # --------------------
-    # Initialize model, optimizer, schedulers
-    # --------------------
-    use_bfloat16 = config.meta.use_bfloat16
-
+    # Initialize models
     encoder = TextTransformer(config=config).to(device)
     predictor = TextPredictor(
-        input_dim=config.model.embed_dim, pred_dim=config.model.pred_dim
+        input_dim=config.model.embed_dim,
+        pred_dim=config.model.pred_dim,
     ).to(device)
 
+    # Initialize optimizer and schedulers
     optimizer, scaler, scheduler, wd_scheduler = init_optimizer(
         encoder=encoder,
         predictor=predictor,
@@ -100,9 +81,17 @@ def train(config: LANGJEPAConfig) -> None:
         warmup=config.optimization.warmup,
         total_epochs=config.optimization.epochs,
         steps_per_epoch=len(dataloader),
-        use_bfloat16=use_bfloat16,
+        use_bfloat16=config.meta.use_bfloat16,
     )
 
+    # Initialize training monitor
+    monitor = TrainingMonitor(
+        tokenizer=config.data.tokenizer,
+        log_dir=Path(config.logging.log_dir),
+        log_to_wandb=True,
+    )
+
+    # Load checkpoint if specified
     start_epoch = 0
     if config.meta.load_checkpoint:
         start_epoch = load_checkpoint(
@@ -114,176 +103,117 @@ def train(config: LANGJEPAConfig) -> None:
             device=device,
         )
 
-    # --------------------
     # Training loop
-    # --------------------
-    epochs = config.optimization.epochs
-    log_freq = config.logging.log_freq
-    checkpoint_freq = config.logging.checkpoint_freq
-
     loss_meter = AverageMeter()
     encoder.train()
     predictor.train()
 
-    monitor = TrainingMonitor(
-        tokenizer=config.data.tokenizer,
-        log_to_wandb=True,
-        num_examples=2,
-        log_every_n_epochs=1
-    )
-
-    for epoch in range(start_epoch, epochs):
+    for epoch in range(start_epoch, config.optimization.epochs):
         epoch_start = time.time()
         loss_meter.reset()
 
-        # Track epoch metrics
-        epoch_metrics = {"epoch": epoch + 1, "epoch_loss": 0.0, "epoch_time": 0.0}
+        for itr, batch in enumerate(dataloader):
+            batch: Batch
+            # Move batch to device
+            context_ids = batch.context_ids.to(device)
+            context_mask = batch.padding_masks.to(device)
 
-        for itr, mask_output in enumerate(dataloader):
-            mask_output: MaskOutput
-            iter_start = time.time()
-            timing_metrics = {}
+            # Process target sentences
+            target_tokens = config.data.tokenizer(
+                batch.target_texts,
+                padding=True,
+                truncation=True,
+                max_length=config.model.max_length,
+                return_tensors="pt",
+            ).to(device)
 
-            # Data loading time
-            data_load_time = time.time() - iter_start
-            timing_metrics["data_loading_time"] = data_load_time
-            print(f"Data loading took: {data_load_time:.3f}s")
+            # Get embeddings for both context and target
+            with torch.cuda.amp.autocast(enabled=config.meta.use_bfloat16):
+                # Get target embeddings
+                with torch.no_grad():
+                    target_features = encoder(
+                        target_tokens.input_ids,
+                        target_tokens.attention_mask,
+                    )
+                    # Average token embeddings for sentence representation
+                    target_features = target_features.mean(dim=1)
+                    target_features = predictor.project_targets(target_features)
+                    target_features = F.normalize(target_features, p=2, dim=-1)
 
-            # Move to device
-            move_start = time.time()
-            input_ids = mask_output.input_ids.to(device)
-            attention_mask = mask_output.attention_mask.to(device)
-            enc_masks_batch = mask_output.enc_masks
-            pred_masks_batch = mask_output.pred_masks
+                # Get context embeddings and predict
+                context_features = encoder(context_ids, context_mask)
+                predicted_features = predictor(context_features, context_mask)
+                predicted_features = F.normalize(predicted_features, p=2, dim=-1)
 
-            # Move to device
-            move_time = time.time() - move_start
-            timing_metrics["device_transfer_time"] = move_time
-            print(f"Moving to device took: {move_time:.3f}s")
-
-            # Forward passes and timing tracking
-            # Step 1: Forward target encoder
-            target_start = time.time()
-            with torch.no_grad():
-                target_features = encoder(input_ids, attention_mask)
-                target_features = normalize_features(target_features)
-                target_feats = extract_features_for_masks(
-                    target_features, pred_masks_batch
+                # Compute loss using cosine similarity
+                loss = (
+                    1 - F.cosine_similarity(predicted_features, target_features).mean()
                 )
-                target_feats = predictor.project_targets(target_feats)
-            target_time = time.time() - target_start
-            timing_metrics["target_encoding_time"] = target_time
-            print(f"Target encoding took: {target_time:.3f}s")
 
-            # Step 2: Forward context encoder and predictor
-            context_start = time.time()
-            context_features = encoder(input_ids, attention_mask)
-            context_time = time.time() - context_start
-            timing_metrics["context_encoding_time"] = context_time
-            print(f"Context encoding took: {context_time:.3f}s")
-
-            pred_start = time.time()
-            predicted_feats = predictor(
-                context_features, enc_masks_batch, pred_masks_batch
-            )
-            pred_time = time.time() - pred_start
-            timing_metrics["prediction_time"] = pred_time
-            print(f"Prediction took: {pred_time:.3f}s")
-
-            # Step 3: Compute loss
-            loss_start = time.time()
-            loss = F.smooth_l1_loss(predicted_feats, target_feats)
-            loss_time = time.time() - loss_start
-            timing_metrics["loss_computation_time"] = loss_time
-            print(f"Loss computation took: {loss_time:.3f}s")
-
-            # Step 4: Optimization
-            opt_start = time.time()
+            # Optimize
             optimizer.zero_grad()
-            if use_bfloat16 and scaler is not None:
+            if scaler is not None:
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
             else:
                 loss.backward()
                 optimizer.step()
-            opt_time = time.time() - opt_start
-            timing_metrics["optimization_time"] = opt_time
-            print(f"Optimization took: {opt_time:.3f}s")
 
-            # Scheduler updates
-            sched_start = time.time()
+            # Update schedulers
             lr = scheduler.step()
             wd_scheduler.step()
-            sched_time = time.time() - sched_start
-            timing_metrics["scheduler_time"] = sched_time
-            print(f"Scheduler updates took: {sched_time:.3f}s")
 
-            # Total iteration time
-            iter_time = time.time() - iter_start
-            timing_metrics["total_iteration_time"] = iter_time
-            print(f"Total iteration took: {iter_time:.3f}s")
-            print("-" * 50)
-
-            # Log metrics to wandb
+            # Logging
             loss_val = loss.item()
             loss_meter.update(loss_val)
 
-            wandb_metrics = {
-                "train/loss": loss_val,
-                "train/learning_rate": lr,
-                "train/iteration": itr + epoch * len(dataloader),
-                **timing_metrics,
-            }
-            debug(wandb_metrics)
-
-            # Add some tensor statistics
-            wandb_metrics.update(
-                {
-                    "stats/target_features_mean": target_features.mean().item(),
-                    "stats/target_features_std": target_features.std().item(),
-                    "stats/predicted_features_mean": predicted_feats.mean().item(),
-                    "stats/predicted_features_std": predicted_feats.std().item(),
-                }
-            )
-
-            wandb.log(wandb_metrics)
-
-            # Regular logging
-            if (itr % log_freq == 0) or math.isnan(loss_val) or math.isinf(loss_val):
+            if itr % config.logging.log_freq == 0:
                 elapsed = (time.time() - epoch_start) * 1000.0
                 csv_logger.log(epoch + 1, itr, loss_val, lr, elapsed)
                 print(
-                    f"[Epoch {epoch+1}/{epochs}, Itr {itr}] loss: {loss_meter.avg:.4f}, lr: {lr:.2e}"
+                    f"[Epoch {epoch+1}/{config.optimization.epochs}, Itr {itr}] "
+                    f"loss: {loss_meter.avg:.4f}, lr: {lr:.2e}"
                 )
 
-            if itr == 0:  # Only monitor first batch of each epoch
+                # Log metrics
+                wandb.log(
+                    {
+                        "train/loss": loss_val,
+                        "train/learning_rate": lr,
+                        "train/iteration": itr + epoch * len(dataloader),
+                        "stats/target_features_norm": target_features.norm(dim=1)
+                        .mean()
+                        .item(),
+                        "stats/predicted_features_norm": predicted_features.norm(dim=1)
+                        .mean()
+                        .item(),
+                        "stats/cosine_similarity": F.cosine_similarity(
+                            predicted_features, target_features
+                        )
+                        .mean()
+                        .item(),
+                    }
+                )
+
+                # Monitor training examples
                 monitor.log_training_examples(
                     epoch=epoch,
-                    batch_texts=mask_output.original_texts,
-                    mask_output=mask_output,
+                    batch_texts=batch.context_texts,
+                    target_texts=batch.target_texts,
+                    predicted_features=predicted_features.detach(),
+                    target_features=target_features.detach(),
                     encoder=encoder,
                     predictor=predictor,
-                    device=device,
+                )
+                monitor.log_validation_metrics(
+                    epoch=epoch,
+                    pred_embeddings=predicted_features,
+                    target_embeddings=target_features,
                 )
 
-        # End of epoch logging
-        epoch_time = time.time() - epoch_start
-        epoch_metrics["epoch_loss"] = loss_meter.avg
-        epoch_metrics["epoch_time"] = epoch_time
-        wandb.log(
-            {
-                "epoch/loss": loss_meter.avg,
-                "epoch/time": epoch_time,
-                "epoch/number": epoch + 1,
-            }
-        )
-
-        print(f"Epoch {epoch+1}/{epochs} finished, avg loss: {loss_meter.avg:.4f}")
-
-        # Save checkpoint
-        if (epoch + 1) % checkpoint_freq == 0:
-            print(f"Saving checkpoint to {config.logging.log_dir}")
+        # End of epoch
+        if (epoch + 1) % config.logging.checkpoint_freq == 0:
             ckpt_path = os.path.join(
                 config.logging.log_dir, f"checkpoint-epoch{epoch+1}.pth"
             )
@@ -296,17 +226,14 @@ def train(config: LANGJEPAConfig) -> None:
                 epoch + 1,
                 loss_meter.avg,
             )
-            print(f"Saved checkpoint to {ckpt_path}")
-            # Log checkpoint to wandb
-            # wandb.save(ckpt_path)
+
+        wandb.log(
+            {
+                "epoch/loss": loss_meter.avg,
+                "epoch/time": time.time() - epoch_start,
+                "epoch/number": epoch + 1,
+            }
+        )
 
     print("Training completed successfully.")
     wandb.finish()
-
-    print("Training completed successfully.")
-
-
-# Placeholder utility functions that we will implement later:
-def normalize_features(features):
-    # For example, L2 normalization over the feature dimension
-    return F.normalize(features, p=2, dim=-1)
