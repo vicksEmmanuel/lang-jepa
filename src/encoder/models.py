@@ -31,7 +31,10 @@ class TextTransformer(nn.Module):
         self.encoder = AutoModel.from_config(model_config)
 
         # After creating encoder, enable gradient checkpointing
-        if hasattr(self.encoder, "gradient_checkpointing_enable"):
+        if (
+            hasattr(self.encoder, "gradient_checkpointing_enable")
+            and config.meta.use_gradient_checkpointing
+        ):
             self.encoder.gradient_checkpointing_enable()
 
     def forward(
