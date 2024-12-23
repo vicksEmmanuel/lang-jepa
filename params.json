@@ -1,0 +1,9 @@
+{
+  "$schema": "https://params.com/params.json",
+  "docs": {
+    "main": "main_encoder.md",
+    "sidebar": {
+      "Introduction": "README.md"
+    }
+  }
+}
