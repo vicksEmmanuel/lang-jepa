@@ -23,7 +23,7 @@ def main():
     # Load pretrained encoder
     encoder = TextTransformer(config)
     checkpoint = torch.load(
-        "logs/lang_jepa_exp1/checkpoint-epoch5.pth",
+        "lang-jepa/logs/lang_jepa/checkpoint-epoch5.pth",
         weights_only=True,  # Fix for the warning
     )
     encoder.load_state_dict(checkpoint["encoder"])
@@ -51,8 +51,17 @@ def main():
         min_length=config.data.min_length,
     )
 
+
+    text = []
+
+    for sample in dataset.samples:
+        text.append(sample.context + sample.target)
+
+
+    print(f"Loaded {len(text)} samples")
+
     # Split into train/eval
-    train_texts, eval_texts = split_train_eval(dataset.samples, eval_ratio=0.1)
+    train_texts, eval_texts = split_train_eval(text, eval_ratio=0.1)
 
     # Create data loaders
     train_loader = create_train_loader(config, texts=train_texts)

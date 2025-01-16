@@ -61,13 +61,79 @@ class TextDataset(Dataset):
 
         # Load dataset
         print(f"Loading dataset with {window_size}-sentence sliding window...")
-        ds = load_dataset(
-            path="HuggingFaceFW/fineweb-edu",
-            name=train_file,
-            split="train",
-            streaming=True,
-            cache_dir=cache_dir,
+        # ds = load_dataset(
+        #     path="HuggingFaceFW/fineweb-edu",
+        #     name=train_file,
+        #     split="train",
+        #     streaming=True,
+        #     cache_dir=cache_dir,
+        # )
+
+        import pandas as pd
+        train = pd.read_parquet('/mnt/c/Users/kodeb/OneDrive/Desktop/vicks/Ai/lang-jepa/src/common/datasets/data/train.parquet')
+
+        from datasets import Dataset, DatasetDict
+        train_dataset = Dataset.from_pandas(train)
+
+        def preprocess_function(examples):
+            prompt = examples["prompt"]
+            response_a = examples["response_a"]
+            response_b = examples["response_b"]
+            language = examples["language"]
+            answer = examples["winner"]
+
+            prompt_id = "<prompt>"
+            response_1_id = "<response_1_id>"
+            response_2_id = "<response_2_id>"
+            answer_id = "<answer>"
+
+
+            result = []
+
+            for i in range(len(prompt)):
+
+                output = "Response 1" if answer[i] == "model_a" else "Response 2"
+                answer_preamble = "Final Decision: Based on above analysis, the user's preferences is"
+                output_labels = "Answer: "
+
+
+                cot_steps = [
+                    f"""
+                    Step 1: Language Analysis
+                    - Identify prompt language: {language[i]}
+                    - Verify response language consistency
+                    - Check language appropriateness
+                    """
+                    f"""Step 2 : Content Quality Assessment
+                    - Check response relevance to prompt
+                    - Compare comprehensiveness
+                    - Evaluate clarity and naturalness
+                    """,
+                ]
+                
+                steps_text = "\n".join(cot_steps)
+
+                cot_prompt = f"Given the prompt {prompt_id} `{prompt[i]}` \n Response 1 : {response_1_id}`{response_a[i]}` \n Respone 2 : {response_2_id}`{response_b[i]}` " + "\n" + steps_text + "\n" + answer_preamble + answer_id + output_labels + output
+                result.append(cot_prompt)
+
+            
+            return {
+                "text": result
+            }
+
+
+
+        ds = train_dataset.map(
+            (lambda x: preprocess_function(
+                x, 
+            )),
+            batched=True,
         )
+
+        for i in range(5):
+            print("Input: ", ds["text"][i], "\n")
+            print(f"{'='*100}\n")
+
 
         # Initialize sentence splitter
         splitter = SentenceSplitter(SentenceSplitterConfig())

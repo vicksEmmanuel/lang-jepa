@@ -186,15 +186,23 @@ class DecoderTrainer:
         total_loss = 0
         num_batches = 0
 
-        for batch in self.eval_loader:
+        for i, batch in enumerate(self.eval_loader):
+
+            if i >= 10:
+                break
+
             # Process batch
             input_ids, attention_mask = self._process_batch(batch)
-
             # Get concepts
             concepts = self.encoder(input_ids, attention_mask)
 
+            if len(concepts.shape) > 2:
+                concepts = concepts.mean(dim=1)  # Average sequence dimension
+
             # Generate
             logits = self.decoder(concepts, target_ids=input_ids)
+
+            print(f"logits: {logits.shape}")
 
             # Compute loss
             loss = F.cross_entropy(

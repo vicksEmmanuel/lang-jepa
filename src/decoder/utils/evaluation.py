@@ -168,7 +168,11 @@ class SampleGenerator:
                 text, return_tensors="pt", padding=True, truncation=True
             ).to(self.device)
 
-            concept = self.encoder(inputs["input_ids"])
+            # Pass input_ids to the encoder
+            concept = self.encoder(inputs["input_ids"])  # [1, seq_len, embed_dim]
+
+            # Aggregate the sequence dimension (e.g., mean pooling)
+            concept = concept.mean(dim=1)  # [1, embed_dim]
 
             # Generate from concept
             generated = self.decoder.generate(concept, self.tokenizer)[

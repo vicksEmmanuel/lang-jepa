@@ -122,6 +122,7 @@ class ConceptDecoder(nn.Module):
                 dtype=torch.long,
             )
 
+
             logits = []
             for _ in range(self.config.max_length - 1):
                 # Embed current sequence
@@ -133,8 +134,11 @@ class ConceptDecoder(nn.Module):
                     curr_ids.size(1), device=device
                 )
 
+                # Ensure memory is 3-dimensional
+                memory_expanded = memory.unsqueeze(1).expand(-1, curr_ids.size(1), -1)  # [B, L, H]
+
                 hidden = self.decoder(
-                    tgt_emb, memory[:, : curr_ids.size(1)], tgt_mask=tgt_mask
+                    tgt_emb, memory_expanded, tgt_mask=tgt_mask
                 )
                 step_logits = self.out_proj(hidden[:, -1:])  # [B, 1, V]
                 logits.append(step_logits)
@@ -150,6 +154,8 @@ class ConceptDecoder(nn.Module):
             logits = torch.cat(logits, dim=1)
 
         return logits
+    
+
 
     @torch.no_grad()
     def generate(

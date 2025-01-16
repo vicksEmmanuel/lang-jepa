@@ -1,7 +1,7 @@
 data:
   # Dataset configuration
   train_file: "sample-10BT"  # FineWeb-Edu dataset file
-  batch_size: 32
+  batch_size: 4
   num_workers: 4
   tokenizer_path: "roberta-base"  # Base tokenizer to use
 #  tokenizer_path: "bert-base-uncased"
@@ -11,7 +11,7 @@ data:
   min_sentences: 2  # Minimum number of sentences (needed for context/target split)
 
 model:
-  max_length: 128  # Should be smaller, around 128-256
+  max_length: 256  # Should be smaller, around 128-256
   pred_dim: 384
   embed_dim: 768   # Standard size for base models
   num_layers: 12
